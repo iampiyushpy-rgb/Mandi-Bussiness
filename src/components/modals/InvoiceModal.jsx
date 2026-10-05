@@ -1,5 +1,6 @@
 import React from 'react';
 import { Printer, Download, CheckCircle, Apple, ShieldCheck } from 'lucide-react';
+import { formatDisplayDate } from '../../utils/dateUtils';
 
 export default function InvoiceModal({ isOpen, onClose, salesOrder }) {
   if (!isOpen || !salesOrder) return null;
@@ -58,7 +59,7 @@ export default function InvoiceModal({ isOpen, onClose, salesOrder }) {
                   Invoice No: INV-{so.sales_order_no?.replace('SO-', '')}
                 </div>
                 <div style={{ color: '#64748b', fontSize: '0.82rem', marginTop: '2px' }}>
-                  Date: {so.order_date}
+                  Date: {formatDisplayDate(so.order_date)}
                 </div>
                 <div style={{ color: '#64748b', fontSize: '0.82rem' }}>
                   Truck No: {so.truck_number || 'WB24CD5678'}

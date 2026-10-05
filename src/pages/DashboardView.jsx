@@ -19,6 +19,8 @@ import {
   History,
   Check,
   Printer,
+  Download,
+  Receipt,
   MapPin,
   Copy,
   Edit,
@@ -31,10 +33,18 @@ import {
   Lock,
   Trash2,
   Percent,
-  Calculator
+  Calculator,
+  Calendar,
+  Filter
 } from 'lucide-react';
+import jsPDF from 'jspdf';
 import { api } from '../services/api';
 import BoardPageView from '../components/dashboard/BoardPageView';
+import CashSellHistoryView from '../components/dashboard/CashSellHistoryView';
+import UdhaarHistoryView from '../components/dashboard/UdhaarHistoryView';
+import PartyKhataView from '../components/dashboard/PartyKhataView';
+import CashSellTransactionsView from '../components/dashboard/CashSellTransactionsView';
+import { formatDisplayDate } from '../utils/dateUtils';
 
 const getSystemDate = () => {
   const d = new Date();
@@ -312,8 +322,13 @@ function CashSaleAdminPage({
   };
 
   // Delete Payment record
-  const handleDeletePayment = (paymentId) => {
+  const handleDeletePayment = async (paymentId) => {
     if (window.confirm('Are you sure you want to delete this payment record?')) {
+      try {
+        if (paymentId && typeof paymentId === 'number' && paymentId < 1000000000000) {
+          await api.delete(`/payments/${paymentId}/`).catch(() => null);
+        }
+      } catch {}
       setCashSalePayments(prev => {
         const updated = prev.filter(p => p.id !== paymentId);
         if (saveCashSalePayments) saveCashSalePayments(updated);
@@ -324,7 +339,12 @@ function CashSaleAdminPage({
   };
 
   // Delete All Party Khata Data (Settlements, Payments, and optionally Profiles)
-  const confirmDeleteAllPartyKhata = () => {
+  const confirmDeleteAllPartyKhata = async () => {
+    // 0. Trigger backend reset
+    try {
+      await api.post('/core/reset-all-data/').catch(() => null);
+    } catch {}
+
     // 1. Clear settlements
     setCashSaleSettlements([]);
     if (saveCashSaleSettlements) saveCashSaleSettlements([]);
@@ -344,14 +364,29 @@ function CashSaleAdminPage({
       try { localStorage.removeItem('dashboard_supplier_profiles'); } catch {}
     }
 
+    // 5. Clear truck sales if profiles included
+    if (includeProfilesInDelete) {
+      setTruckSalesList([]);
+      try {
+        localStorage.removeItem('mandi_truck_sales');
+        localStorage.setItem('mandi_truck_sales', '[]');
+      } catch {}
+    }
+
     setSelectedSuppName(null);
     setDeleteAllModalOpen(false);
     if (showToast) showToast('Party Khata ka saara data successfully delete kar diya gaya! 🗑️', 'info');
   };
 
   // Delete Single Settlement / Truck Invoice
-  const handleDeleteSettlement = (settlementId, truckNo) => {
+  const handleDeleteSettlement = async (settlementId, truckNo) => {
     if (window.confirm(`Kya aap truck ${truckNo ? `"${truckNo}"` : ''} ka settlement invoice delete karna chahte hain?`)) {
+      try {
+        if (settlementId && typeof settlementId === 'number' && settlementId < 1000000000000) {
+          await api.delete(`/purchases/orders/${settlementId}/`).catch(() => null);
+          await api.delete(`/purchases/truck-payments/${settlementId}/`).catch(() => null);
+        }
+      } catch {}
       setCashSaleSettlements(prev => {
         const updated = prev.filter(s => s.id !== settlementId);
         if (saveCashSaleSettlements) saveCashSaleSettlements(updated);
@@ -362,23 +397,40 @@ function CashSaleAdminPage({
   };
 
   // Delete Single Supplier's Khata (all settlements & payments for this supplier)
-  const handleDeleteSupplierKhata = (sName) => {
+  const handleDeleteSupplierKhata = async (sName) => {
     if (!sName) return;
     if (window.confirm(`Kya aap "${sName}" ka Party Khata data (Settlements aur Payments) delete karna chahte hain?`)) {
+      try {
+        const suppObj = (unifiedSuppliers || []).find(s => (s.supplier_name || s.name || '').trim().toLowerCase() === sName.trim().toLowerCase());
+        if (suppObj?.id && typeof suppObj.id === 'number' && suppObj.id < 1000000000000) {
+          await api.delete(`/suppliers/${suppObj.id}/`).catch(() => null);
+        }
+      } catch {}
       const norm = sName.trim().toLowerCase();
       setCashSaleSettlements(prev => {
         const updated = prev.filter(s => (s.supplier_name || '').trim().toLowerCase() !== norm);
         if (saveCashSaleSettlements) saveCashSaleSettlements(updated);
+        try { localStorage.setItem('mandi_cash_sale_settlements', JSON.stringify(updated)); } catch {}
         return updated;
       });
       setCashSalePayments(prev => {
         const updated = prev.filter(p => (p.supplier_name || '').trim().toLowerCase() !== norm);
         if (saveCashSalePayments) saveCashSalePayments(updated);
+        try { localStorage.setItem('mandi_cash_sale_payments', JSON.stringify(updated)); } catch {}
         return updated;
       });
       if (setSupplierProfiles) {
-        setSupplierProfiles(prev => prev.filter(sp => (sp.supplier_name || '').trim().toLowerCase() !== norm));
+        setSupplierProfiles(prev => {
+          const updated = prev.filter(sp => (sp.supplier_name || '').trim().toLowerCase() !== norm);
+          try { localStorage.setItem('dashboard_supplier_profiles', JSON.stringify(updated)); } catch {}
+          return updated;
+        });
       }
+      setTruckSalesList(prev => {
+        const updated = prev.filter(s => (s.supplier_name || '').trim().toLowerCase() !== norm);
+        try { localStorage.setItem('mandi_truck_sales', JSON.stringify(updated)); } catch {}
+        return updated;
+      });
       if (selectedSuppName && selectedSuppName.trim().toLowerCase() === norm) {
         setSelectedSuppName(null);
       }
@@ -1165,11 +1217,6 @@ function CashSaleAdminPage({
                       <Phone size={13} color="#d97706" /> {selectedSuppProfile.phone}
                     </span>
                   )}
-                  {selectedSuppProfile.city && (
-                    <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                      <MapPin size={13} color="#d97706" /> {selectedSuppProfile.city}
-                    </span>
-                  )}
                   {selectedSuppProfile.bank_name && (
                     <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                       <Building2 size={13} color="#d97706" /> {selectedSuppProfile.bank_name} {selectedSuppProfile.account_number ? `(A/C: ${selectedSuppProfile.account_number})` : ''}
@@ -1436,7 +1483,7 @@ function CashSaleAdminPage({
                               {truckItem.truck_no}
                             </div>
                             <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', marginTop: '1px' }}>
-                              📅 Date: {truckItem.saved_date} {isUnsettled ? '• (In Progress Truck Purchase)' : '• (Settlement Finalized)'}
+                              📅 Date: {formatDisplayDate(truckItem.saved_date)} {isUnsettled ? '• (In Progress Truck Purchase)' : '• (Settlement Finalized)'}
                             </div>
                           </div>
                         </div>
@@ -1589,7 +1636,7 @@ function CashSaleAdminPage({
                             {truckItem.truckPayments.map(tp => (
                               <div key={tp.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.78rem' }}>
                                 <span style={{ color: 'var(--text-secondary)' }}>
-                                  📅 {tp.date} • <span style={{ fontWeight: 700, color: 'var(--text-main)' }}>{tp.payment_method}</span> {tp.reference ? `(${tp.reference})` : ''}
+                                  📅 {formatDisplayDate(tp.date)} • <span style={{ fontWeight: 700, color: 'var(--text-main)' }}>{tp.payment_method}</span> {tp.reference ? `(${tp.reference})` : ''}
                                 </span>
                                 <span style={{ fontWeight: 900, color: '#10b981' }}>
                                   + ₹{Number(tp.amount).toLocaleString()}
@@ -1750,7 +1797,7 @@ function CashSaleAdminPage({
                       </div>
 
                       <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
-                        📅 Date: {pay.date} {pay.reference ? `• Ref / UTR: ${pay.reference}` : ''}
+                        📅 Date: {formatDisplayDate(pay.date)} {pay.reference ? `• Ref / UTR: ${pay.reference}` : ''}
                       </div>
 
                       {pay.notes && (
@@ -1968,8 +2015,10 @@ export default function DashboardView({
   const setIsSupplierTrucksModalOpen = extSetIsSupplierTrucksModalOpen || setInternalSupplierTrucksModalOpen;
   const [selectedSupplierForDetail, setSelectedSupplierForDetail] = useState(null);
   const [isSupplierDetailPopupOpen, setIsSupplierDetailPopupOpen] = useState(false);
+  const [isPassbookSectionOpen, setIsPassbookSectionOpen] = useState(false);
   const [supplierTrucksSearch, setSupplierTrucksSearch] = useState('');
   const [selectedTruckFilter, setSelectedTruckFilter] = useState('ALL');
+  const [supplierDirectoryFilter, setSupplierDirectoryFilter] = useState('ALL'); // 'ALL' | 'ACTIVE_TRUCKS'
   const [truckStatusFilter, setTruckStatusFilter] = useState('ACTIVE'); // 'ACTIVE' (balance > 0) | 'COMPLETE' (balance === 0)
   const [selectedTruckNumber, setSelectedTruckNumber] = useState(null);
   const [truckSettlements, setTruckSettlements] = useState(() => {
@@ -1997,7 +2046,7 @@ export default function DashboardView({
     });
   };
 
-  const handlePrintTruckInvoice = (supplier, truckNo, fruitName, truckSales, totalBoxes, totalSold, settlement, commAmount, fareAmount, kuliAmount, invoiceTotal) => {
+  const handlePrintTruckInvoice = (supplier, truckNo, fruitName, truckSales, totalBoxes, totalSold, settlement, commAmount, fareAmount, kuliAmount, invoiceTotal, cashAmount = 0) => {
     const printWin = window.open('', '_blank', 'width=840,height=900');
     if (!printWin) {
       if (showToast) showToast('Please allow popups to print invoice', 'error');
@@ -2037,7 +2086,7 @@ export default function DashboardView({
           </div>
           <div style="text-align: right;">
             <span class="badge">TRUCK SETTLEMENT INVOICE</span>
-            <div style="font-size: 11px; margin-top: 6px; color: #475569;">Date: ${getSystemDate()}</div>
+            <div style="font-size: 11px; margin-top: 6px; color: #475569;">Date: ${formatDisplayDate(getSystemDate())}</div>
           </div>
         </div>
 
@@ -2045,7 +2094,7 @@ export default function DashboardView({
           <div>
             <div class="label">Vyapari / Supplier</div>
             <div class="val">${supplier?.supplier_name || 'Supplier'}</div>
-            <div style="font-size: 11px; color: #64748b; margin-top: 2px;">Phone: ${supplier?.phone || '—'} • City: ${supplier?.city || 'Mandi'}</div>
+            <div style="font-size: 11px; color: #64748b; margin-top: 2px;">Phone: ${supplier?.phone || '—'}</div>
           </div>
           <div>
             <div class="label">Bank Settlement Passbook</div>
@@ -2079,7 +2128,7 @@ export default function DashboardView({
           <tbody>
             ${(truckSales || []).map(s => `
               <tr>
-                <td>${s.selling_date || '—'}</td>
+                <td>${formatDisplayDate(s.selling_date) || '—'}</td>
                 <td><strong>${s.customer_name || 'Customer'}</strong></td>
                 <td>${s.product_name || fruitName || 'Fruit'}</td>
                 <td><strong>${s.boxes} BX</strong> @ ₹${Number(s.rate_per_box).toLocaleString()}</td>
@@ -2114,6 +2163,12 @@ export default function DashboardView({
               <span>Less: Kuli (Hamali):</span>
               <strong>- ₹${kuliAmount.toLocaleString()}</strong>
             </div>
+            ${cashAmount > 0 ? `
+            <div class="calc-row minus">
+              <span>Less: Cash (Advance / Driver):</span>
+              <strong>- ₹${cashAmount.toLocaleString()}</strong>
+            </div>
+            ` : ''}
             <div class="calc-row highlight">
               <span>NET INVOICE TOTAL (Payable):</span>
               <span>₹${invoiceTotal.toLocaleString()}</span>
@@ -2151,12 +2206,11 @@ export default function DashboardView({
   const [cashSaleSupplier, setCashSaleSupplier] = useState(null); // active supplier for sidebar
   const [cashSaleSettlements, setCashSaleSettlements] = useState(() => {
     try {
-      const resetDone = localStorage.getItem('mandi_party_khata_reset_v3');
-      if (!resetDone) {
+      const fullWipe = localStorage.getItem('mandi_clean_slate_total_v1');
+      if (!fullWipe) {
         localStorage.removeItem('mandi_cash_sale_settlements');
         localStorage.removeItem('mandi_cash_sale_payments');
         localStorage.removeItem('mandi_truck_settlements');
-        localStorage.setItem('mandi_party_khata_reset_v3', 'true');
         return [];
       }
       return JSON.parse(localStorage.getItem('mandi_cash_sale_settlements')) || [];
@@ -2164,8 +2218,8 @@ export default function DashboardView({
   });
   const [cashSalePayments, setCashSalePayments] = useState(() => {
     try {
-      const resetDone = localStorage.getItem('mandi_party_khata_reset_v3');
-      if (!resetDone) {
+      const fullWipe = localStorage.getItem('mandi_clean_slate_total_v1');
+      if (!fullWipe) {
         return [];
       }
       return JSON.parse(localStorage.getItem('mandi_cash_sale_payments')) || [];
@@ -2190,37 +2244,59 @@ export default function DashboardView({
     try { localStorage.setItem('mandi_cash_sale_payments', JSON.stringify(updated)); } catch { }
   };
 
-  const handleSaveSettlementAndOpenSidebar = (supplier, tNum, invoiceTotal, totalSoldValue, commAmount, fareAmount, kuliAmount) => {
+  const handleSaveSettlementAndOpenSidebar = (supplier, tNum, invoiceTotal, totalSoldValue, commAmount, fareAmount, kuliAmount, cashAmount = 0, fruit = '', boxes = 0) => {
+    const suppName = supplier?.supplier_name || '';
+    const isAlreadySettled = (cashSaleSettlements || []).some(
+      r => r.truck_no === tNum && (r.supplier_name || '').trim().toLowerCase() === suppName.trim().toLowerCase()
+    );
+
+    // If already saved, ask for confirmation when clicked again
+    if (isAlreadySettled) {
+      const confirmUpdate = window.confirm(
+        `Truck ${tNum} ka settlement pehle se save hai.\n\nKya aap is settlement ko naye Total Amount (₹${invoiceTotal.toLocaleString()}) ke sath update karna chahte hain?`
+      );
+      if (!confirmUpdate) return;
+    }
+
     setSavedSettlementTruck(tNum);
-    setTimeout(() => setSavedSettlementTruck(null), 2500);
+
     // Save settlement record
     const record = {
       id: Date.now(),
-      supplier_name: supplier?.supplier_name || '',
+      supplier_name: suppName,
       truck_no: tNum,
       saved_date: getSystemDate(),
       gross_bikri: totalSoldValue,
+      total_amount: invoiceTotal,
       commission: commAmount,
       truck_fare: fareAmount,
       kuli: kuliAmount,
+      cash_advance: cashAmount,
       net_invoice: invoiceTotal,
+      fruit: fruit || '',
+      boxes: boxes || 0,
       status: 'PENDING' // PENDING | PAID | PARTIAL
     };
     setCashSaleSettlements(prev => {
-      const exists = prev.find(r => r.truck_no === tNum && r.supplier_name === record.supplier_name);
+      const exists = prev.find(r => r.truck_no === tNum && (r.supplier_name || '').trim().toLowerCase() === suppName.trim().toLowerCase());
       let updated;
       if (exists) {
-        updated = prev.map(r => r.truck_no === tNum && r.supplier_name === record.supplier_name ? { ...r, ...record, id: r.id } : r);
+        updated = prev.map(r => r.truck_no === tNum && (r.supplier_name || '').trim().toLowerCase() === suppName.trim().toLowerCase() ? { ...r, ...record, id: r.id } : r);
       } else {
         updated = [record, ...prev];
       }
       saveCashSaleSettlements(updated);
       return updated;
     });
-    setCashSaleSupplier(supplier);
-    setCashSidebarTab('invoices');
-    setIsCashSaleSidebarOpen(true);
-    if (showToast) showToast(`Settlement saved! Party Khata mein Net Invoice ₹${invoiceTotal.toLocaleString()} record ho gaya. 💰`, 'success');
+
+    // Only show toast message, do NOT open sidebar
+    if (showToast) {
+      if (isAlreadySettled) {
+        showToast(`Truck ${tNum} ka settlement update ho gaya! Party Khata me Total Amount ₹${invoiceTotal.toLocaleString()} set ho gaya. ✓`, 'success');
+      } else {
+        showToast(`Settlement save ho gaya! Party Khata me Total Amount ₹${invoiceTotal.toLocaleString()} set ho gaya. ✓`, 'success');
+      }
+    }
   };
 
   const handleCashPaymentSave = (e) => {
@@ -2364,17 +2440,21 @@ export default function DashboardView({
   // ---------------------------------------------------------------------------
   const [supplierProfiles, setSupplierProfiles] = useState(() => {
     try {
+      const fullWipe = localStorage.getItem('mandi_clean_slate_total_v1');
+      if (!fullWipe) {
+        localStorage.removeItem('dashboard_supplier_profiles');
+        return [];
+      }
       const saved = localStorage.getItem('dashboard_supplier_profiles');
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
-          const resetDone = localStorage.getItem('mandi_sales_prices_cleaned_v2');
           return parsed
             .filter(p => !['Maa Fruits Mandi Traders', 'Royal Kashmir Orchards'].includes(p.supplier_name))
             .map(p => ({
               ...p,
               variety: p.variety === 'Grade A' ? '' : (p.variety || ''),
-              balance_box: !resetDone ? Number(p.boxes || p.balance_box || 0) : Number(p.balance_box !== undefined ? p.balance_box : p.boxes || 0)
+              balance_box: Number(p.balance_box !== undefined ? p.balance_box : p.boxes || 0)
             }));
         }
       }
@@ -2443,72 +2523,23 @@ export default function DashboardView({
       }
     } catch { }
 
-    const isCleaned = localStorage.getItem('mandi_clean_slate_v7');
-    if (!isCleaned) {
-      localStorage.removeItem('mandi_truck_settlements');
+    const isTotalCleaned = localStorage.getItem('mandi_clean_slate_total_v1');
+    if (!isTotalCleaned) {
       localStorage.removeItem('dashboard_supplier_profiles');
-      localStorage.removeItem('mandi_custom_fruits');
-      localStorage.removeItem('mandi_custom_fruit_varieties');
-      localStorage.setItem('mandi_clean_slate_v7', 'true');
-      setSupplierProfiles([]);
-    }
-
-    const isKhataCleaned = localStorage.getItem('mandi_party_khata_reset_v3');
-    if (!isKhataCleaned) {
+      localStorage.removeItem('mandi_customer_profiles');
+      localStorage.removeItem('mandi_truck_sales');
+      localStorage.removeItem('mandi_truck_settlements');
       localStorage.removeItem('mandi_cash_sale_settlements');
       localStorage.removeItem('mandi_cash_sale_payments');
-      localStorage.removeItem('mandi_truck_settlements');
-      localStorage.setItem('mandi_party_khata_reset_v3', 'true');
+      localStorage.removeItem('mandi_party_khata_profiles');
+      localStorage.removeItem('mandi_custom_fruits');
+      localStorage.removeItem('mandi_custom_fruit_varieties');
+      localStorage.setItem('mandi_clean_slate_total_v1', 'true');
+      setSupplierProfiles([]);
+      setCustomerProfiles([]);
+      setTruckSalesList([]);
       setCashSaleSettlements([]);
       setCashSalePayments([]);
-    }
-
-    const isSalesCleaned = localStorage.getItem('mandi_sales_prices_cleaned_v2');
-    if (!isSalesCleaned) {
-      localStorage.removeItem('mandi_truck_sales');
-      localStorage.setItem('mandi_truck_sales', '[]');
-      setTruckSalesList([]);
-
-      // Reset customer buy histories & balances
-      const savedCust = localStorage.getItem('mandi_customer_profiles');
-      if (savedCust) {
-        try {
-          const parsed = JSON.parse(savedCust);
-          if (Array.isArray(parsed)) {
-            const cleanedCust = parsed.map(c => ({
-              ...c,
-              total_boxes: 0,
-              total_bought: 0,
-              total_paid: 0,
-              current_balance: 0,
-              khata_balance: 0,
-              total_pending: 0,
-              buy_history: [],
-              payment_history: []
-            }));
-            localStorage.setItem('mandi_customer_profiles', JSON.stringify(cleanedCust));
-            setCustomerProfiles(cleanedCust);
-          }
-        } catch {}
-      }
-
-      // Restore lot balances
-      const savedSupp = localStorage.getItem('dashboard_supplier_profiles');
-      if (savedSupp) {
-        try {
-          const parsed = JSON.parse(savedSupp);
-          if (Array.isArray(parsed)) {
-            const cleanedSupp = parsed.map(p => ({
-              ...p,
-              balance_box: Number(p.boxes || p.total_boxes || p.balance_box || 0)
-            }));
-            localStorage.setItem('dashboard_supplier_profiles', JSON.stringify(cleanedSupp));
-            setSupplierProfiles(cleanedSupp);
-          }
-        } catch {}
-      }
-
-      localStorage.setItem('mandi_sales_prices_cleaned_v2', 'true');
     }
   }, []);
 
@@ -2518,24 +2549,16 @@ export default function DashboardView({
   // ---------------------------------------------------------------------------
   const [customerProfiles, setCustomerProfiles] = useState(() => {
     try {
+      const fullWipe = localStorage.getItem('mandi_clean_slate_total_v1');
+      if (!fullWipe) {
+        localStorage.removeItem('mandi_customer_profiles');
+        return [];
+      }
       const saved = localStorage.getItem('mandi_customer_profiles');
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
-          const resetDone = localStorage.getItem('mandi_sales_prices_cleaned_v2');
-          return parsed
-            .filter(c => !['Sharma Fruits Wholesale', 'FreshMart Hypermarkets', 'Golden Tree Dry Fruits & Sweets'].includes(c.customer_name))
-            .map(c => (!resetDone ? {
-              ...c,
-              total_boxes: 0,
-              total_bought: 0,
-              total_paid: 0,
-              current_balance: 0,
-              khata_balance: 0,
-              total_pending: 0,
-              buy_history: [],
-              payment_history: []
-            } : c));
+          return parsed.filter(c => !['Sharma Fruits Wholesale', 'FreshMart Hypermarkets', 'Golden Tree Dry Fruits & Sweets'].includes(c.customer_name));
         }
       }
     } catch {
@@ -2557,10 +2580,9 @@ export default function DashboardView({
   // Truck-wise fruit sales history (persisted in localStorage)
   const [truckSalesList, setTruckSalesList] = useState(() => {
     try {
-      const resetDone = localStorage.getItem('mandi_sales_prices_cleaned_v2');
-      if (!resetDone) {
+      const fullWipe = localStorage.getItem('mandi_clean_slate_total_v1');
+      if (!fullWipe) {
         localStorage.removeItem('mandi_truck_sales');
-        localStorage.setItem('mandi_sales_prices_cleaned_v2', 'true');
         return [];
       }
       const saved = localStorage.getItem('mandi_truck_sales');
@@ -2615,6 +2637,18 @@ export default function DashboardView({
   const [selectedCustomerForView, setSelectedCustomerForView] = useState(null);
   const [isCustomerDetailPopupOpen, setIsCustomerDetailPopupOpen] = useState(false);
   const [activeCustomerTab, setActiveCustomerTab] = useState('buy'); // 'buy' | 'payment'
+  const [selectedBuyDateDetails, setSelectedBuyDateDetails] = useState(null);
+  const [isBillSelectMode, setIsBillSelectMode] = useState(false);
+  const [selectedBillItemIds, setSelectedBillItemIds] = useState([]);
+  const [selectedItemsForBill, setSelectedItemsForBill] = useState(null);
+  const [selectedItemForBill, setSelectedItemForBill] = useState(null);
+  const [billPayForm, setBillPayForm] = useState({
+    amount: '',
+    date: getSystemDate(),
+    payment_method: 'CASH',
+    reference: '',
+    notes: ''
+  });
 
   // Payment Drawer inside Customer Profile
   const [isPaymentDrawerOpen, setIsPaymentDrawerOpen] = useState(false);
@@ -3515,6 +3549,452 @@ export default function DashboardView({
   };
 
   // ---------------------------------------------------------------------------
+  // Handlers: Item Selection, Bill Generation, PDF Download & Payment
+  // ---------------------------------------------------------------------------
+  const toggleItemSelection = (itemKey) => {
+    setSelectedBillItemIds(prev =>
+      prev.includes(itemKey) ? prev.filter(k => k !== itemKey) : [...prev, itemKey]
+    );
+  };
+
+  const handleOpenSelectedBill = () => {
+    if (!selectedBuyDateDetails || selectedBillItemIds.length === 0) return;
+    const items = selectedBuyDateDetails.items.filter((it, idx) =>
+      selectedBillItemIds.includes(it.id || idx)
+    );
+    if (items.length === 0) return;
+    setSelectedItemsForBill(items);
+    setSelectedItemForBill(items[0]); // backward compatibility
+
+    // Calculate credit sum
+    const creditTotal = items
+      .filter(it => it.payment_mode === 'CREDIT')
+      .reduce((sum, it) => sum + Number(it.total || 0), 0);
+
+    const totalAmt = items.reduce((sum, it) => sum + Number(it.total || 0), 0);
+
+    setBillPayForm({
+      amount: creditTotal > 0 ? creditTotal : totalAmt,
+      date: getSystemDate(),
+      payment_method: 'CASH',
+      reference: `BP-${String(items[0]?.id || Date.now()).slice(-6)}`,
+      notes: `Bill payment for ${items.length} produce items (${items.map(i => i.product_name).join(', ')})`
+    });
+  };
+
+  const handleOpenItemBill = (item) => {
+    setSelectedItemsForBill([item]);
+    setSelectedItemForBill(item);
+    setBillPayForm({
+      amount: item.total || '',
+      date: getSystemDate(),
+      payment_method: 'CASH',
+      reference: `BP-${String(item.id || Date.now()).slice(-6)}`,
+      notes: `Bill payment for ${item.product_name} (${item.truck_no || 'Standard'})`
+    });
+  };
+
+  const handleDownloadBillPDF = (itemsToBill) => {
+    const items = itemsToBill || selectedItemsForBill || (selectedItemForBill ? [selectedItemForBill] : []);
+    if (!items || items.length === 0 || !selectedCustomerForView) {
+      if (showToast) showToast('No items selected for bill download', 'error');
+      return;
+    }
+
+    try {
+      const doc = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'a4'
+      });
+
+      const customerName = selectedCustomerForView.customer_name || 'Customer';
+      const billDate = formatDisplayDate(selectedBuyDateDetails?.date || getSystemDate());
+      const billNo = `BP-${String(items[0]?.id || Date.now()).slice(-6)}`;
+
+      // Brand Header
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(18);
+      doc.setTextColor(15, 23, 42);
+      doc.text('AZIZ INTERNATIONAL', 105, 18, { align: 'center' });
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9);
+      doc.setTextColor(100, 116, 139);
+      doc.text('Azadpur Mandi, Delhi • Fruits & Dry Fruits Commission Agent', 105, 24, { align: 'center' });
+
+      // Badge Title
+      doc.setFillColor(15, 23, 42);
+      doc.roundedRect(65, 28, 80, 7, 2, 2, 'F');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      doc.setTextColor(255, 255, 255);
+      doc.text('BIKRI PARCHI / SALE INVOICE', 105, 33, { align: 'center' });
+
+      // Divider line
+      doc.setDrawColor(203, 213, 225);
+      doc.setLineWidth(0.5);
+      doc.line(14, 38, 196, 38);
+
+      // Meta Details
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      doc.setTextColor(15, 23, 42);
+      doc.text(`Customer: ${customerName}`, 14, 46);
+      if (selectedCustomerForView.phone) {
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(9);
+        doc.setTextColor(71, 85, 105);
+        doc.text(`Phone: ${selectedCustomerForView.phone}`, 14, 52);
+      }
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      doc.setTextColor(15, 23, 42);
+      doc.text(`Bill No: ${billNo}`, 196, 46, { align: 'right' });
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9);
+      doc.setTextColor(71, 85, 105);
+      doc.text(`Date: ${billDate}`, 196, 52, { align: 'right' });
+
+      // Table Header: 4 Columns (Buy Date, Fruit Name, Total Box * Rate, Total)
+      let yPos = 60;
+      doc.setFillColor(241, 245, 249);
+      doc.rect(14, yPos, 182, 8, 'F');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9);
+      doc.setTextColor(15, 23, 42);
+      doc.text('Buy Date', 17, yPos + 5.5);
+      doc.text('Fruit Name', 52, yPos + 5.5);
+      doc.text('Total Box × Rate', 125, yPos + 5.5, { align: 'center' });
+      doc.text('Total (Rs)', 193, yPos + 5.5, { align: 'right' });
+
+      yPos += 8;
+      doc.setFont('helvetica', 'normal');
+
+      let totalBoxes = 0;
+      let totalAmt = 0;
+      let totalCash = 0;
+      let totalCredit = 0;
+
+      items.forEach((item) => {
+        const boxes = Number(item.boxes || 0);
+        const rate = Number(item.rate_per_box || 0);
+        const total = Number(item.total || 0);
+        const mode = item.payment_mode || 'CREDIT';
+        const itemDate = formatDisplayDate(item.date || item.selling_date || selectedBuyDateDetails?.date || getSystemDate());
+
+        totalBoxes += boxes;
+        totalAmt += total;
+        if (mode === 'CASH') totalCash += total;
+        else totalCredit += total;
+
+        doc.setDrawColor(226, 232, 240);
+        doc.setLineWidth(0.2);
+        doc.line(14, yPos, 196, yPos);
+
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(9);
+        doc.setTextColor(100, 116, 139);
+        doc.text(itemDate, 17, yPos + 5.5);
+
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(15, 23, 42);
+        const fruitText = item.truck_no ? `${item.product_name || 'Item'} (${item.truck_no})` : String(item.product_name || 'Item');
+        doc.text(fruitText, 52, yPos + 5.5);
+
+        doc.setFont('helvetica', 'normal');
+        doc.text(`${boxes} BX × Rs ${rate.toLocaleString('en-IN')}`, 125, yPos + 5.5, { align: 'center' });
+
+        doc.setFont('helvetica', 'bold');
+        doc.text(`${total.toLocaleString('en-IN')}`, 193, yPos + 5.5, { align: 'right' });
+
+        yPos += 8;
+      });
+
+      // Bottom Table Border
+      doc.setDrawColor(15, 23, 42);
+      doc.setLineWidth(0.5);
+      doc.line(14, yPos, 196, yPos);
+
+      // Summary Box
+      yPos += 6;
+      doc.setFillColor(248, 250, 252);
+      doc.roundedRect(14, yPos, 182, 22, 2, 2, 'F');
+      doc.setDrawColor(203, 213, 225);
+      doc.setLineWidth(0.3);
+      doc.roundedRect(14, yPos, 182, 22, 2, 2, 'D');
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9);
+      doc.setTextColor(71, 85, 105);
+      doc.text(`Total Boxes: ${totalBoxes} BX`, 20, yPos + 7);
+      doc.text(`Cash Paid: Rs ${totalCash.toLocaleString('en-IN')}`, 20, yPos + 14);
+      doc.text(`Credit (Udhaar): Rs ${totalCredit.toLocaleString('en-IN')}`, 90, yPos + 14);
+
+      doc.setFontSize(11);
+      doc.setTextColor(15, 23, 42);
+      doc.text(`NET TOTAL: Rs ${totalAmt.toLocaleString('en-IN')}`, 190, yPos + 10, { align: 'right' });
+
+      // Footer
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.setTextColor(148, 163, 184);
+      doc.text('Computer Generated Mandi Bikri Bill • Aziz International • Shubh Labh 🙏', 105, yPos + 32, { align: 'center' });
+
+      doc.save(`Bill_${customerName.replace(/[^a-zA-Z0-9]/g, '_')}_${billDate}.pdf`);
+      if (showToast) showToast('Bill PDF downloaded successfully! 📄📥', 'success');
+    } catch (err) {
+      console.error('PDF generation error:', err);
+      if (showToast) showToast('Could not generate PDF. Opening Print view...', 'error');
+      handlePrintSelectedBill(items);
+    }
+  };
+
+  const handlePrintSelectedBill = (itemsToBill) => {
+    const items = itemsToBill || selectedItemsForBill || (selectedItemForBill ? [selectedItemForBill] : []);
+    if (!items || items.length === 0 || !selectedCustomerForView) return;
+    const printWin = window.open('', '_blank', 'width=780,height=850');
+    if (!printWin) return;
+    const billDate = formatDisplayDate(selectedBuyDateDetails?.date || getSystemDate());
+    const billNo = `BP-${String(items[0]?.id || Date.now()).slice(-6)}`;
+
+    let totalBoxes = 0;
+    let totalAmt = 0;
+    let totalCash = 0;
+    let totalCredit = 0;
+
+    const rowsHtml = items.map((item) => {
+      const boxes = Number(item.boxes || 0);
+      const rate = Number(item.rate_per_box || 0);
+      const total = Number(item.total || 0);
+      const mode = item.payment_mode || 'CREDIT';
+      const itemDate = formatDisplayDate(item.date || item.selling_date || selectedBuyDateDetails?.date || getSystemDate());
+      totalBoxes += boxes;
+      totalAmt += total;
+      if (mode === 'CASH') totalCash += total;
+      else totalCredit += total;
+
+      return `
+        <tr>
+          <td style="padding: 8px 10px; border-bottom: 1px dashed #cbd5e1; font-family: monospace; color: #64748b;">${itemDate}</td>
+          <td style="padding: 8px 10px; border-bottom: 1px dashed #cbd5e1; font-weight: bold; color: #0f172a;">
+            ${item.product_name || 'Item'}
+            ${item.truck_no ? `<span style="font-size:11px;color:#2563eb;margin-left:6px;font-family:monospace;">🚚 ${item.truck_no}</span>` : ''}
+          </td>
+          <td style="padding: 8px 10px; border-bottom: 1px dashed #cbd5e1; text-align: center;">
+            <strong>${boxes} BX</strong> × ₹${rate.toLocaleString('en-IN')}
+          </td>
+          <td style="padding: 8px 10px; border-bottom: 1px dashed #cbd5e1; text-align: right; font-weight: bold;">
+            ₹${total.toLocaleString('en-IN')}
+            <div style="font-size: 10px; color: ${mode === 'CASH' ? '#16a34a' : '#d97706'}; font-weight: 700;">${mode}</div>
+          </td>
+        </tr>
+      `;
+    }).join('');
+
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Bill Parchi - ${selectedCustomerForView.customer_name}</title>
+        <style>
+          body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 24px; color: #1e293b; background: #fff; }
+          .parchi-card { border: 2px dashed #94a3b8; padding: 24px; border-radius: 12px; max-width: 650px; margin: 0 auto; }
+          .hdr { text-align: center; border-bottom: 2px solid #0f172a; padding-bottom: 12px; margin-bottom: 16px; }
+          .hdr h1 { margin: 0; font-size: 22px; color: #0f172a; letter-spacing: 0.05em; font-weight: 900; }
+          .hdr p { margin: 3px 0; font-size: 12px; color: #64748b; }
+          .badge { display: inline-block; background: #0f172a; color: #fff; padding: 3px 12px; border-radius: 4px; font-size: 11px; font-weight: 800; margin-top: 6px; }
+          .meta { display: flex; justify-content: space-between; margin-bottom: 16px; font-size: 13px; }
+          table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 14px 0; }
+          th { background: #f1f5f9; padding: 8px 10px; border-bottom: 2px solid #0f172a; }
+          .summary-box { background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 12px; margin-top: 14px; }
+          .total-row { display: flex; justify-content: space-between; font-size: 16px; font-weight: 900; color: #0f172a; }
+          .footer { text-align: center; margin-top: 24px; font-size: 11px; color: #64748b; border-top: 1px solid #e2e8f0; padding-top: 10px; }
+        </style>
+      </head>
+      <body>
+        <div class="parchi-card">
+          <div class="hdr">
+            <h1>AZIZ INTERNATIONAL</h1>
+            <p>Azadpur Mandi, Delhi • Commission Agent & Fruits</p>
+            <span class="badge">BIKRI PARCHI / SALE INVOICE</span>
+          </div>
+          <div class="meta">
+            <div>
+              <div><strong>Customer:</strong> ${selectedCustomerForView.customer_name}</div>
+              <div><strong>Phone:</strong> ${selectedCustomerForView.phone || '—'}</div>
+            </div>
+            <div style="text-align: right;">
+              <div><strong>Bill No:</strong> ${billNo}</div>
+              <div><strong>Date:</strong> ${billDate}</div>
+            </div>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th style="text-align: left; width: 22%;">Buy Date</th>
+                <th style="text-align: left; width: 32%;">Fruit Name</th>
+                <th style="text-align: center; width: 26%;">Total Box × Rate</th>
+                <th style="text-align: right; width: 20%;">Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rowsHtml}
+            </tbody>
+          </table>
+          <div class="summary-box">
+            <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 6px; color: #475569;">
+              <span>Total Boxes: <strong>${totalBoxes} BX</strong></span>
+              <span>Cash Paid: <strong>₹${totalCash.toLocaleString('en-IN')}</strong></span>
+              <span>Credit (Udhaar): <strong>₹${totalCredit.toLocaleString('en-IN')}</strong></span>
+            </div>
+            <div class="total-row" style="border-top: 1px solid #cbd5e1; padding-top: 6px;">
+              <span>NET TOTAL AMOUNT:</span>
+              <span>₹${totalAmt.toLocaleString('en-IN')}</span>
+            </div>
+          </div>
+          <div class="footer">
+            Computer Generated Bikri Bill • Shubh Labh 🙏
+          </div>
+        </div>
+        <script>window.print();</script>
+      </body>
+      </html>
+    `;
+    printWin.document.open();
+    printWin.document.write(html);
+    printWin.document.close();
+  };
+
+  const handlePrintItemBill = (item) => {
+    handlePrintSelectedBill(item ? [item] : selectedItemsForBill);
+  };
+
+  const handlePaySelectedBillItems = async (e) => {
+    if (e) e.preventDefault();
+    const items = selectedItemsForBill || (selectedItemForBill ? [selectedItemForBill] : []);
+    if (!items || items.length === 0 || !selectedCustomerForView) return;
+
+    const amt = Number(billPayForm.amount);
+    if (!amt || amt <= 0) {
+      if (showToast) showToast('Please enter a valid payment amount', 'error');
+      return;
+    }
+
+    const payDate = billPayForm.date || getSystemDate();
+    const payMethod = billPayForm.payment_method || 'CASH';
+    const payRef = billPayForm.reference || `BP-${String(items[0]?.id || Date.now()).slice(-6)}`;
+    const payNotes = billPayForm.notes || `Paid for ${items.length} items (${items.map(i => i.product_name).join(', ')})`;
+
+    try {
+      await api.post('/payments/', {
+        party_type: 'CUSTOMER',
+        customer: selectedCustomerForView.id,
+        payment_type: 'INWARD',
+        payment_date: payDate,
+        amount: amt,
+        payment_method: payMethod,
+        payment_mode: payMethod,
+        transaction_reference: payRef,
+        reference_number: payRef,
+        notes: payNotes,
+        description: payNotes
+      }).catch(() => null);
+    } catch {}
+
+    const newPayment = {
+      id: Date.now(),
+      date: payDate,
+      amount: amt,
+      payment_method: payMethod,
+      reference: payRef,
+      notes: payNotes
+    };
+
+    const targetCreditIds = new Set(
+      items.filter(it => it.payment_mode === 'CREDIT').map(it => it.id)
+    );
+
+    const updatedBuyHistory = (selectedCustomerForView.buy_history || []).map(b => {
+      const isMatch = (targetCreditIds.has(b.id)) || items.some(it =>
+        it.payment_mode === 'CREDIT' &&
+        b.product_name === it.product_name &&
+        b.truck_no === it.truck_no &&
+        Number(b.total) === Number(it.total)
+      );
+      if (isMatch) {
+        return { ...b, payment_mode: 'CASH' };
+      }
+      return b;
+    });
+
+    const updatedPayments = [newPayment, ...(selectedCustomerForView.payment_history || [])];
+    const updatedCustomer = {
+      ...selectedCustomerForView,
+      total_paid: Number(selectedCustomerForView.total_paid || 0) + amt,
+      current_balance: Math.max(0, Number(selectedCustomerForView.current_balance || 0) - amt),
+      buy_history: updatedBuyHistory,
+      payment_history: updatedPayments
+    };
+
+    setCustomerProfiles(prev => {
+      const copy = prev.map(c => c.id === selectedCustomerForView.id ? updatedCustomer : c);
+      try {
+        localStorage.setItem('mandi_customer_profiles', JSON.stringify(copy));
+      } catch {}
+      return copy;
+    });
+    setSelectedCustomerForView(updatedCustomer);
+
+    if (selectedBuyDateDetails) {
+      setSelectedBuyDateDetails(prev => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          items: prev.items.map(it => {
+            const isMatch = (targetCreditIds.has(it.id)) || items.some(s =>
+              s.payment_mode === 'CREDIT' &&
+              it.product_name === s.product_name &&
+              it.truck_no === s.truck_no &&
+              Number(it.total) === Number(s.total)
+            );
+            if (isMatch) {
+              return { ...it, payment_mode: 'CASH' };
+            }
+            return it;
+          })
+        };
+      });
+    }
+
+    // Update selected items in bill modal so UI reflects CASH
+    setSelectedItemsForBill(prev => prev ? prev.map(it => ({ ...it, payment_mode: 'CASH' })) : null);
+    setSelectedItemForBill(prev => prev ? ({ ...prev, payment_mode: 'CASH' }) : null);
+
+    setTruckSalesList(prev => prev.map(s => {
+      const isMatch = (targetCreditIds.has(s.id)) || items.some(it =>
+        it.payment_mode === 'CREDIT' &&
+        s.customer_name === selectedCustomerForView.customer_name &&
+        s.product_name === it.product_name &&
+        s.truck_no === it.truck_no &&
+        Number(s.total) === Number(it.total)
+      );
+      if (isMatch) {
+        return { ...s, payment_mode: 'CASH' };
+      }
+      return s;
+    }));
+
+    if (showToast) {
+      showToast(`Payment of ₹${amt.toLocaleString()} recorded! Mode converted to CASH and added to Payment History ✅💵`, 'success');
+    }
+    if (onRefresh) onRefresh();
+  };
+
+  const handlePayBillItem = handlePaySelectedBillItems;
+
+  // ---------------------------------------------------------------------------
   // Handlers: Add New Customer Manually (Synced to MySQL)
   // ---------------------------------------------------------------------------
   const handleAddNewCustomer = async (e) => {
@@ -3672,7 +4152,6 @@ export default function DashboardView({
           id: s.id,
           supplier_name: s.supplier_name || s.name,
           phone: s.phone || '',
-          city: s.city || 'Azadpur Mandi, Delhi',
           bank_name: s.bank_name || '',
           account_number: s.account_number || '',
           ifsc_code: s.ifsc_code || '',
@@ -3705,7 +4184,6 @@ export default function DashboardView({
           id: sp.id,
           supplier_name: sp.supplier_name,
           phone: sp.phone || '',
-          city: sp.city || 'Azadpur Mandi, Delhi',
           bank_name: sp.bank_name || '',
           account_number: sp.account_number || '',
           ifsc_code: sp.ifsc_code || '',
@@ -3721,26 +4199,79 @@ export default function DashboardView({
     return Array.from(map.values());
   }, [suppliers, supplierProfiles]);
 
+  const activeTrucksCount = useMemo(() => {
+    const activeSet = new Set();
+    (supplierProfiles || []).forEach(sp => {
+      if (sp.truckno && (sp.balance_box === undefined || Number(sp.balance_box) > 0)) {
+        activeSet.add(sp.truckno.trim().toUpperCase());
+      }
+    });
+    (purchasesList || []).forEach(p => {
+      if (p.truck_number && (p.balance_box === undefined || Number(p.balance_box) > 0) && p.status !== 'COMPLETED' && p.status !== 'SETTLED') {
+        activeSet.add(p.truck_number.trim().toUpperCase());
+      }
+    });
+    unifiedSuppliers.forEach(s => {
+      if (s.truckno && (s.balance_box === undefined || Number(s.balance_box) > 0)) {
+        activeSet.add(s.truckno.trim().toUpperCase());
+      }
+    });
+    if (activeSet.size > 0) return activeSet.size;
+    // Fallback to distinct trucks in system if any exist
+    return Array.from(new Set([
+      ...unifiedSuppliers.map(s => s.truckno).filter(Boolean),
+      ...purchasesList.map(p => p.truck_number).filter(Boolean)
+    ])).length;
+  }, [supplierProfiles, purchasesList, unifiedSuppliers]);
+
   const filteredUnifiedSuppliers = useMemo(() => {
+    let list = unifiedSuppliers;
+
+    if (supplierDirectoryFilter === 'ACTIVE_TRUCKS') {
+      list = list.filter(s => {
+        // 1. Balance box > 0
+        if (Number(s.balance_box || 0) > 0) return true;
+        // 2. Active inward purchases
+        const sName = (s.supplier_name || s.name || '').trim().toLowerCase();
+        const hasActiveOrder = (purchasesList || []).some(p => {
+          const match = p.supplier === s.id || (p.supplier_name && p.supplier_name.toLowerCase() === sName);
+          if (!match) return false;
+          if (p.balance_box !== undefined && p.balance_box !== null) {
+            return Number(p.balance_box) > 0;
+          }
+          return p.truck_number && p.status !== 'COMPLETED' && p.status !== 'SETTLED';
+        });
+        if (hasActiveOrder) return true;
+        // 3. Active entry in supplierProfiles
+        const hasActiveSp = (supplierProfiles || []).some(sp => {
+          const match = (sp.supplier_name || '').trim().toLowerCase() === sName;
+          return match && (sp.balance_box === undefined || Number(sp.balance_box) > 0);
+        });
+        if (hasActiveSp) return true;
+        // 4. Has truckno with balance undefined (not set to 0)
+        if (s.truckno && s.balance_box === undefined) return true;
+        return false;
+      });
+    }
+
     const q = supplierTrucksSearch.trim().toLowerCase();
-    if (!q) return unifiedSuppliers;
-    return unifiedSuppliers.filter(s => {
+    if (!q) return list;
+    return list.filter(s => {
       const name = (s.supplier_name || '').toLowerCase();
       const phone = (s.phone || '').toLowerCase();
       const bank = (s.bank_name || '').toLowerCase();
       const acc = (s.account_number || '').toLowerCase();
       const ifsc = (s.ifsc_code || '').toLowerCase();
       const truck = (s.truckno || '').toLowerCase();
-      const city = (s.city || '').toLowerCase();
-      return name.includes(q) || phone.includes(q) || bank.includes(q) || acc.includes(q) || ifsc.includes(q) || truck.includes(q) || city.includes(q);
+      return name.includes(q) || phone.includes(q) || bank.includes(q) || acc.includes(q) || ifsc.includes(q) || truck.includes(q);
     });
-  }, [unifiedSuppliers, supplierTrucksSearch]);
+  }, [unifiedSuppliers, supplierTrucksSearch, supplierDirectoryFilter, purchasesList, supplierProfiles]);
 
   const handleCopyPassbook = (supp) => {
     const text = `🏦 Bank Passbook Details
 Supplier: ${supp.supplier_name || supp.name}
 Phone: ${supp.phone || 'N/A'}
-Bank: ${supp.bank_name || 'State Bank of India'}
+Bank: ${supp.bank_name || 'N/A'}
 A/C No: ${supp.account_number || 'N/A'}
 IFSC: ${supp.ifsc_code || 'N/A'}
 Branch: ${supp.branch_name || 'N/A'}`;
@@ -3755,7 +4286,6 @@ Branch: ${supp.branch_name || 'N/A'}`;
       id: supp.id,
       supplier_name: supp.supplier_name || supp.name || '',
       phone: supp.phone || '',
-      city: supp.city || 'Azadpur Mandi, Delhi',
       bank_name: supp.bank_name || '',
       account_number: supp.account_number || '',
       ifsc_code: supp.ifsc_code || '',
@@ -3777,7 +4307,6 @@ Branch: ${supp.branch_name || 'N/A'}`;
     const payload = {
       supplier_name: cleanName,
       phone: (passbookForm.phone || '').trim(),
-      city: (passbookForm.city || '').trim(),
       bank_name: passbookForm.bank_name || '',
       account_number: passbookForm.account_number || '',
       ifsc_code: passbookForm.ifsc_code || '',
@@ -3830,7 +4359,6 @@ Branch: ${supp.branch_name || 'N/A'}`;
         name: newSupplierModalForm.supplier_name.trim(),
         supplier_name: newSupplierModalForm.supplier_name.trim(),
         phone: newSupplierModalForm.phone.trim(),
-        city: (newSupplierModalForm.city || 'Delhi').trim(),
         bank_name: newSupplierModalForm.bank_name.trim(),
         account_number: newSupplierModalForm.account_number.trim(),
         ifsc_code: newSupplierModalForm.ifsc_code.trim().toUpperCase(),
@@ -3846,7 +4374,6 @@ Branch: ${supp.branch_name || 'N/A'}`;
       setNewSupplierModalForm({
         supplier_name: '',
         phone: '',
-        city: 'Azadpur Mandi, Delhi',
         bank_name: '',
         account_number: '',
         ifsc_code: '',
@@ -3867,7 +4394,6 @@ Branch: ${supp.branch_name || 'N/A'}`;
       setNewSupplierModalForm({
         supplier_name: '',
         phone: '',
-        city: 'Azadpur Mandi, Delhi',
         bank_name: '',
         account_number: '',
         ifsc_code: '',
@@ -3881,26 +4407,95 @@ Branch: ${supp.branch_name || 'N/A'}`;
   // ---------------------------------------------------------------------------
   // Profile Deletion & Clear All Handlers (Active Profiles, Customers, Suppliers)
   // ---------------------------------------------------------------------------
-  const handleDeleteActiveProfile = (profile) => {
+  const handleDeleteActiveProfile = async (profile) => {
     if (!profile) return;
     const name = profile.supplier_name || 'Supplier';
     const truck = profile.truckno ? ` (${profile.truckno})` : '';
     if (window.confirm(`Are you sure you want to delete profile for "${name}"${truck}?`)) {
-      setSupplierProfiles(prev => prev.filter(p => p.id !== profile.id));
+      // 0. Delete from backend database if registered
+      try {
+        if (profile.id && typeof profile.id === 'number' && profile.id < 1000000000000) {
+          await api.delete(`/purchases/orders/${profile.id}/`).catch(() => null);
+          await api.delete(`/purchases/truck-payments/${profile.id}/`).catch(() => null);
+        }
+        const matchedPO = (purchasesList || []).find(p =>
+          p.id === profile.id ||
+          (profile.truckno && (p.truck_number || '').trim().toUpperCase() === (profile.truckno || '').trim().toUpperCase())
+        );
+        if (matchedPO?.id && typeof matchedPO.id === 'number' && matchedPO.id < 1000000000000) {
+          await api.delete(`/purchases/orders/${matchedPO.id}/`).catch(() => null);
+          await api.delete(`/purchases/truck-payments/${matchedPO.id}/`).catch(() => null);
+        }
+      } catch {
+        // ignore network error
+      }
+
+      setSupplierProfiles(prev => {
+        const updated = prev.filter(p => p.id !== profile.id);
+        try { localStorage.setItem('dashboard_supplier_profiles', JSON.stringify(updated)); } catch {}
+        return updated;
+      });
+      // Synchronously clean sales from truckSalesList
+      const pTruck = (profile.truckno || '').replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+      const sNorm = (name || '').trim().toLowerCase();
+      setTruckSalesList(prev => {
+        const updated = prev.filter(s => {
+          if (s.lot_id && String(s.lot_id) === String(profile.id)) return false;
+          if (pTruck && (s.truck_no || '').replace(/[^a-zA-Z0-9]/g, '').toUpperCase() === pTruck) return false;
+          return true;
+        });
+        try { localStorage.setItem('mandi_truck_sales', JSON.stringify(updated)); } catch {}
+        return updated;
+      });
+      // If no other profile exists for this supplier, clean payments & settlements
+      const remainingForSupp = supplierProfiles.filter(p => p.id !== profile.id && (p.supplier_name || '').trim().toLowerCase() === sNorm);
+      if (remainingForSupp.length === 0) {
+        setCashSalePayments(prev => {
+          const updated = (prev || []).filter(p => (p.supplier_name || '').trim().toLowerCase() !== sNorm);
+          try { localStorage.setItem('mandi_cash_sale_payments', JSON.stringify(updated)); } catch {}
+          return updated;
+        });
+        setCashSaleSettlements(prev => {
+          const updated = (prev || []).filter(s => (s.supplier_name || '').trim().toLowerCase() !== sNorm);
+          try { localStorage.setItem('mandi_cash_sale_settlements', JSON.stringify(updated)); } catch {}
+          return updated;
+        });
+      }
       if (showToast) showToast(`Profile for ${name}${truck} deleted!`, 'info');
     }
   };
 
-  const handleClearAllActiveProfiles = () => {
+  const handleClearAllActiveProfiles = async () => {
     if (supplierProfiles.length === 0) {
       if (showToast) showToast('No active profiles to clear!', 'info');
       return;
     }
     if (window.confirm(`Are you sure you want to clear ALL ${supplierProfiles.length} profiles from Active Supplier Profiles & Balance Boxes?`)) {
+      // 0. Clear from backend database
+      try {
+        await api.post('/purchases/orders/clear-all/').catch(() => null);
+      } catch {}
+
       setSupplierProfiles([]);
       try {
         localStorage.removeItem('dashboard_supplier_profiles');
       } catch { }
+      // Clean truck sales as well
+      setTruckSalesList([]);
+      try {
+        localStorage.removeItem('mandi_truck_sales');
+        localStorage.setItem('mandi_truck_sales', '[]');
+      } catch {}
+      // Clean payments & settlements
+      setCashSalePayments([]);
+      if (saveCashSalePayments) saveCashSalePayments([]);
+      try { localStorage.removeItem('mandi_cash_sale_payments'); } catch {}
+      setCashSaleSettlements([]);
+      if (saveCashSaleSettlements) saveCashSaleSettlements([]);
+      try {
+        localStorage.removeItem('mandi_cash_sale_settlements');
+        localStorage.removeItem('mandi_truck_settlements');
+      } catch {}
       if (showToast) showToast('All active supplier profiles & balance boxes cleared!', 'success');
     }
   };
@@ -3909,9 +4504,15 @@ Branch: ${supp.branch_name || 'N/A'}`;
     if (!c) return;
     const name = c.customer_name || 'Customer';
     if (window.confirm(`Are you sure you want to delete customer profile for "${name}"?`)) {
+      // 0. Delete from backend database
       try {
-        if (c.id && typeof c.id === 'number' && c.id < 1000000000000) {
-          await api.delete(`/customers/${c.id}/`).catch(() => null);
+        let custId = (c.id && typeof c.id === 'number' && c.id < 1000000000000) ? c.id : null;
+        if (!custId && name) {
+          const match = (customers || []).find(item => (item.customer_name || item.name || '').trim().toLowerCase() === name.trim().toLowerCase());
+          if (match?.id) custId = match.id;
+        }
+        if (custId) {
+          await api.delete(`/customers/${custId}/`).catch(() => null);
         }
       } catch {
         // ignore network error
@@ -3934,7 +4535,9 @@ Branch: ${supp.branch_name || 'N/A'}`;
       return;
     }
     if (window.confirm(`Are you sure you want to delete ALL ${customerProfiles.length} customer profiles and khata ledgers?`)) {
+      // 0. Delete all customers from backend database
       try {
+        await api.post('/customers/clear-all/').catch(() => null);
         await Promise.all(
           customerProfiles
             .filter(c => c.id && typeof c.id === 'number' && c.id < 1000000000000)
@@ -3958,18 +4561,48 @@ Branch: ${supp.branch_name || 'N/A'}`;
     if (!s) return;
     const name = s.supplier_name || s.name || 'Supplier';
     if (window.confirm(`Are you sure you want to delete supplier profile for "${name}"?`)) {
+      // 0. Delete from backend database
       try {
-        if (s.id && typeof s.id === 'number' && s.id < 1000000000000) {
-          await api.delete(`/suppliers/${s.id}/`).catch(() => null);
+        let suppId = (s.id && typeof s.id === 'number' && s.id < 1000000000000) ? s.id : null;
+        if (!suppId && name) {
+          const match = (suppliers || []).find(item => (item.supplier_name || item.name || '').trim().toLowerCase() === name.trim().toLowerCase());
+          if (match?.id) suppId = match.id;
+        }
+        if (suppId) {
+          await api.delete(`/suppliers/${suppId}/`).catch(() => null);
         }
       } catch {
         // ignore
       }
+      const sNorm = (name || '').trim().toLowerCase();
       if (setSuppliers) {
-        setSuppliers(prev => prev.filter(item => item.id !== s.id && (item.supplier_name || item.name || '').toLowerCase() !== name.toLowerCase()));
+        setSuppliers(prev => prev.filter(item => item.id !== s.id && (item.supplier_name || item.name || '').trim().toLowerCase() !== sNorm));
       }
-      setSupplierProfiles(prev => prev.filter(sp => (sp.supplier_name || '').toLowerCase() !== name.toLowerCase()));
-      if (selectedSupplierForDetail?.id === s.id || (selectedSupplierForDetail?.supplier_name || '').toLowerCase() === name.toLowerCase()) {
+      setSupplierProfiles(prev => {
+        const updated = prev.filter(sp => (sp.supplier_name || '').trim().toLowerCase() !== sNorm);
+        try { localStorage.setItem('dashboard_supplier_profiles', JSON.stringify(updated)); } catch {}
+        return updated;
+      });
+      // Synchronously clean sales from truckSalesList for this supplier
+      setTruckSalesList(prev => {
+        const updated = prev.filter(item => (item.supplier_name || '').trim().toLowerCase() !== sNorm);
+        try { localStorage.setItem('mandi_truck_sales', JSON.stringify(updated)); } catch {}
+        return updated;
+      });
+      // Synchronously clean payments and settlements
+      setCashSalePayments(prev => {
+        const updated = (prev || []).filter(p => (p.supplier_name || '').trim().toLowerCase() !== sNorm);
+        if (saveCashSalePayments) saveCashSalePayments(updated);
+        try { localStorage.setItem('mandi_cash_sale_payments', JSON.stringify(updated)); } catch {}
+        return updated;
+      });
+      setCashSaleSettlements(prev => {
+        const updated = (prev || []).filter(set => (set.supplier_name || '').trim().toLowerCase() !== sNorm);
+        if (saveCashSaleSettlements) saveCashSaleSettlements(updated);
+        try { localStorage.setItem('mandi_cash_sale_settlements', JSON.stringify(updated)); } catch {}
+        return updated;
+      });
+      if (selectedSupplierForDetail?.id === s.id || (selectedSupplierForDetail?.supplier_name || '').trim().toLowerCase() === sNorm) {
         setSelectedSupplierForDetail(null);
         setIsSupplierDetailPopupOpen(false);
       }
@@ -3983,7 +4616,9 @@ Branch: ${supp.branch_name || 'N/A'}`;
       return;
     }
     if (window.confirm(`Are you sure you want to delete ALL ${unifiedSuppliers.length} supplier profiles and truck directories?`)) {
+      // 0. Clear all suppliers from backend database
       try {
+        await api.post('/suppliers/clear-all/').catch(() => null);
         await Promise.all(
           unifiedSuppliers
             .filter(s => s.id && typeof s.id === 'number' && s.id < 1000000000000)
@@ -3994,8 +4629,18 @@ Branch: ${supp.branch_name || 'N/A'}`;
       }
       if (setSuppliers) setSuppliers([]);
       setSupplierProfiles([]);
+      setTruckSalesList([]);
+      setCashSalePayments([]);
+      if (saveCashSalePayments) saveCashSalePayments([]);
+      setCashSaleSettlements([]);
+      if (saveCashSaleSettlements) saveCashSaleSettlements([]);
       try {
         localStorage.removeItem('dashboard_supplier_profiles');
+        localStorage.removeItem('mandi_truck_sales');
+        localStorage.setItem('mandi_truck_sales', '[]');
+        localStorage.removeItem('mandi_cash_sale_payments');
+        localStorage.removeItem('mandi_cash_sale_settlements');
+        localStorage.removeItem('mandi_truck_settlements');
       } catch { }
       setSelectedSupplierForDetail(null);
       setIsSupplierDetailPopupOpen(false);
@@ -4054,43 +4699,115 @@ Branch: ${supp.branch_name || 'N/A'}`;
 
   const totalCustomerDues = customerProfiles.reduce((sum, c) => sum + Number(c.current_balance || 0), 0);
   const totalCustomerBoxes = customerProfiles.reduce((sum, c) => sum + Number(c.total_boxes || 0), 0);
+  const totalCustomerReceived = customerProfiles.reduce((sum, c) => {
+    const cPaid = Number(c.total_paid ?? ((c.payment_history && c.payment_history.length > 0)
+      ? c.payment_history.reduce((pSum, p) => pSum + (Number(p.amount) || 0), 0)
+      : Math.max(0, Number(c.total_bought || 0) - Number(c.current_balance || 0))));
+    return sum + cPaid;
+  }, 0);
 
-  // Helper to fetch all customer fruit sales for this supplier & specific truck
+  // Group selected customer buy_history date-wise
+  const dateWiseBuyHistory = useMemo(() => {
+    if (!selectedCustomerForView?.buy_history || !Array.isArray(selectedCustomerForView.buy_history) || selectedCustomerForView.buy_history.length === 0) {
+      return [];
+    }
+    const map = new Map();
+    selectedCustomerForView.buy_history.forEach(item => {
+      const d = item.date || item.selling_date || 'Unknown Date';
+      if (!map.has(d)) {
+        map.set(d, {
+          date: d,
+          totalBoxes: 0,
+          totalAmount: 0,
+          items: []
+        });
+      }
+      const entry = map.get(d);
+      const boxes = Number(item.boxes || 0);
+      const tot = Number(item.total || 0);
+      entry.totalBoxes += boxes;
+      entry.totalAmount += tot;
+      entry.items.push(item);
+    });
+
+    return Array.from(map.values()).sort((a, b) => {
+      try {
+        return new Date(b.date) - new Date(a.date);
+      } catch {
+        return b.date.localeCompare(a.date);
+      }
+    });
+  }, [selectedCustomerForView]);
+
+  // Helper to fetch all customer fruit sales for this supplier & specific truck (Across all dates)
   const getTruckSalesForSupplier = (activeSupp, truckNum) => {
-    if (!activeSupp) return [];
-    const suppLower = (activeSupp.supplier_name || activeSupp.name || '').trim().toLowerCase();
-    const tNumUpper = truckNum && truckNum !== 'ALL' ? truckNum.trim().toUpperCase() : null;
+    if (!activeSupp && !truckNum) return [];
+    const suppLower = (activeSupp?.supplier_name || activeSupp?.name || '').trim().toLowerCase();
+    const cleanTruck = (t) => (t || '').replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+    const targetTruck = truckNum && truckNum !== 'ALL' ? cleanTruck(truckNum) : null;
     const list = [];
     const seen = new Set();
 
+    const parseDateToTime = (dStr) => {
+      if (!dStr) return 0;
+      const s = String(dStr).trim();
+      if (/^\d{4}-\d{2}-\d{2}/.test(s)) {
+        return new Date(s).getTime() || 0;
+      }
+      const m = s.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})/);
+      if (m) {
+        const dd = m[1].padStart(2, '0');
+        const mm = m[2].padStart(2, '0');
+        let yyyy = m[3];
+        if (yyyy.length === 2) yyyy = '20' + yyyy;
+        return new Date(`${yyyy}-${mm}-${dd}`).getTime() || 0;
+      }
+      const t = new Date(s).getTime();
+      return isNaN(t) ? 0 : t;
+    };
+
+    // 1. From truckSalesList (Rapid Board Sales across ALL dates)
     (truckSalesList || []).forEach(ts => {
+      const tsTruck = cleanTruck(ts.truck_no);
       const tsSupp = (ts.supplier_name || '').trim().toLowerCase();
-      const tsTruck = (ts.truck_no || '').trim().toUpperCase();
-      if (tsSupp === suppLower && (!tNumUpper || tsTruck === tNumUpper)) {
-        if (!seen.has(ts.id)) {
-          seen.add(ts.id);
-          list.push(ts);
+      const truckMatch = targetTruck ? tsTruck === targetTruck : true;
+      const suppMatch = suppLower ? tsSupp === suppLower : true;
+
+      if ((targetTruck && truckMatch) || (!targetTruck && suppMatch)) {
+        const idKey = String(ts.id || `${tsTruck}-${ts.selling_date}-${ts.boxes}-${ts.total}`);
+        if (!seen.has(idKey)) {
+          seen.add(idKey);
+          list.push({
+            ...ts,
+            selling_date: ts.selling_date || ts.date || getSystemDate(),
+            truck_no: ts.truck_no || truckNum
+          });
         }
       }
     });
 
+    // 2. From customerProfiles.buy_history (Customer Sales across ALL dates)
     (customerProfiles || []).forEach(cust => {
       (cust.buy_history || []).forEach(buy => {
+        const buyTruck = cleanTruck(buy.truck_no);
         const buySupp = (buy.supplier_name || '').trim().toLowerCase();
-        const buyTruck = (buy.truck_no || '').trim().toUpperCase();
-        if (buySupp === suppLower && (!tNumUpper || buyTruck === tNumUpper)) {
-          if (!seen.has(buy.id)) {
-            seen.add(buy.id);
+        const truckMatch = targetTruck ? buyTruck === targetTruck : true;
+        const suppMatch = suppLower ? buySupp === suppLower : true;
+
+        if ((targetTruck && truckMatch) || (!targetTruck && suppMatch)) {
+          const idKey = String(buy.id || `${buyTruck}-${buy.date}-${buy.boxes}-${buy.total}`);
+          if (!seen.has(idKey)) {
+            seen.add(idKey);
             list.push({
-              id: buy.id,
-              selling_date: buy.date || buy.selling_date || getSystemDate(),
+              id: buy.id || Date.now() + Math.random(),
+              selling_date: buy.date || buy.selling_date || (buy.created_at ? String(buy.created_at).slice(0, 10) : getSystemDate()),
               customer_name: cust.customer_name || 'Customer',
               customer_phone: cust.phone || '',
-              truck_no: buyTruck,
-              supplier_name: activeSupp.supplier_name || activeSupp.name,
-              product_name: buy.product_name || 'Fresh Fruit',
+              truck_no: buy.truck_no || truckNum,
+              supplier_name: activeSupp?.supplier_name || activeSupp?.name || buy.supplier_name,
+              product_name: buy.product_name || 'Fresh Produce',
               boxes: Number(buy.boxes || 0),
-              rate_per_box: Number(buy.rate_per_box || 0),
+              rate_per_box: Number(buy.rate_per_box || (Number(buy.boxes || 0) > 0 ? Number(buy.total || 0) / Number(buy.boxes || 0) : 0)),
               total: Number(buy.total || 0),
               payment_mode: buy.payment_mode || 'CREDIT'
             });
@@ -4099,34 +4816,149 @@ Branch: ${supp.branch_name || 'N/A'}`;
       });
     });
 
-    return list.sort((a, b) => new Date(b.selling_date || 0) - new Date(a.selling_date || 0));
+    // 3. From salesList (Backend Django SalesOrders across ALL dates)
+    (salesList || []).forEach(s => {
+      const sTruck = cleanTruck(s.truck_number || s.truck_no || '');
+      const sSupp = (s.supplier_name || s.supplier || '').trim().toLowerCase();
+      const truckMatch = targetTruck ? sTruck === targetTruck : true;
+      const suppMatch = suppLower ? sSupp === suppLower : true;
+
+      if ((targetTruck && truckMatch) || (!targetTruck && suppMatch)) {
+        const sDate = s.order_date || s.sale_date || s.date || (s.created_at ? String(s.created_at).slice(0, 10) : getSystemDate());
+        if (Array.isArray(s.items) && s.items.length > 0) {
+          s.items.forEach(it => {
+            const itKey = `so-item-${s.id}-${it.id || it.product_name}-${it.line_total}`;
+            if (!seen.has(itKey)) {
+              seen.add(itKey);
+              list.push({
+                id: it.id || `${s.id}-${Math.random()}`,
+                selling_date: sDate,
+                customer_name: s.customer_name || 'Customer',
+                customer_phone: s.customer_phone || '',
+                truck_no: s.truck_number || s.truck_no || truckNum,
+                supplier_name: activeSupp?.supplier_name || activeSupp?.name,
+                product_name: it.product_name || 'Fresh Produce',
+                boxes: Number(it.quantity_boxes || it.boxes || 0),
+                rate_per_box: Number(it.selling_rate || it.rate || 0),
+                total: Number(it.line_total || it.total || 0),
+                payment_mode: s.payment_terms || s.payment_type || 'CREDIT'
+              });
+            }
+          });
+        } else {
+          const sKey = `so-${s.id}`;
+          if (!seen.has(sKey)) {
+            seen.add(sKey);
+            list.push({
+              id: s.id,
+              selling_date: sDate,
+              customer_name: s.customer_name || 'Customer',
+              customer_phone: s.customer_phone || '',
+              truck_no: s.truck_number || s.truck_no || truckNum,
+              supplier_name: activeSupp?.supplier_name || activeSupp?.name,
+              product_name: s.product_name || s.fruit || 'Fresh Produce',
+              boxes: Number(s.total_boxes || s.boxes || 0),
+              rate_per_box: Number(s.rate || 0),
+              total: Number(s.grand_total || s.total_amount || s.total || 0),
+              payment_mode: s.payment_terms || s.payment_type || 'CREDIT'
+            });
+          }
+        }
+      }
+    });
+
+    return list.sort((a, b) => parseDateToTime(b.selling_date) - parseDateToTime(a.selling_date));
   };
 
   // ---------------------------------------------------------------------------
-  // Cash Sale Ledger Admin Page (shown when sidebar tab 'cash-sale' is active)
+  // Party Khata (Supplier Profiles & Transition History)
   // ---------------------------------------------------------------------------
   if (activeTab === 'cash-sale') {
-    const allSupplierNames = Array.from(new Set([
-      ...unifiedSuppliers.map(s => s.supplier_name || s.name).filter(Boolean),
-      ...cashSaleSettlements.map(s => s.supplier_name).filter(Boolean),
-      ...cashSalePayments.map(p => p.supplier_name).filter(Boolean)
-    ]));
-
     return (
-      <CashSaleAdminPage
+      <PartyKhataView
+        unifiedSuppliers={unifiedSuppliers}
+        suppliers={suppliers}
+        setSuppliers={setSuppliers}
+        supplierProfiles={supplierProfiles}
+        setSupplierProfiles={setSupplierProfiles}
+        purchasesList={purchasesList}
+        truckSalesList={truckSalesList}
+        setTruckSalesList={setTruckSalesList}
+        salesList={salesList}
         cashSaleSettlements={cashSaleSettlements}
         setCashSaleSettlements={setCashSaleSettlements}
         saveCashSaleSettlements={saveCashSaleSettlements}
         cashSalePayments={cashSalePayments}
         setCashSalePayments={setCashSalePayments}
         saveCashSalePayments={saveCashSalePayments}
-        allSupplierNames={allSupplierNames}
-        unifiedSuppliers={unifiedSuppliers}
-        purchasesList={purchasesList}
-        showToast={showToast}
         getSystemDate={getSystemDate}
+        showToast={showToast}
+        onBack={() => setActiveTab('dashboard')}
+      />
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Cash Sell History Full Page (Rokda Bikri Byora with From/To Date Calendar)
+  // ---------------------------------------------------------------------------
+  if (activeTab === 'cash-sell-history') {
+    return (
+      <CashSellHistoryView
+        truckSalesList={truckSalesList}
+        customerProfiles={customerProfiles}
+        salesList={salesList}
         supplierProfiles={supplierProfiles}
-        setSupplierProfiles={setSupplierProfiles}
+        suppliers={suppliers}
+        purchasesList={purchasesList}
+        selectedBoardDate={getSystemDate()}
+        onBack={() => setActiveTab('dashboard')}
+        formatDisplayDate={formatDisplayDate}
+        getSystemDate={getSystemDate}
+        showToast={showToast}
+      />
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Udhaar History Full Page (Khata Bikri Byora with From/To Date Calendar)
+  // ---------------------------------------------------------------------------
+  if (activeTab === 'udhaar-history') {
+    return (
+      <UdhaarHistoryView
+        truckSalesList={truckSalesList}
+        customerProfiles={customerProfiles}
+        salesList={salesList}
+        supplierProfiles={supplierProfiles}
+        suppliers={suppliers}
+        purchasesList={purchasesList}
+        selectedBoardDate={getSystemDate()}
+        onBack={() => setActiveTab('dashboard')}
+        formatDisplayDate={formatDisplayDate}
+        getSystemDate={getSystemDate}
+        showToast={showToast}
+      />
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Cash Sell Transactions — Collection (Tagada) & Expenses (Paisa Diya)
+  // ---------------------------------------------------------------------------
+  if (activeTab === 'cash-sell-transactions') {
+    return (
+      <CashSellTransactionsView
+        customerProfiles={customerProfiles}
+        setCustomerProfiles={setCustomerProfiles}
+        suppliers={suppliers}
+        supplierProfiles={supplierProfiles}
+        cashSalePayments={cashSalePayments}
+        setCashSalePayments={setCashSalePayments}
+        saveCashSalePayments={saveCashSalePayments}
+        truckSalesList={truckSalesList}
+        salesList={salesList}
+        purchasesList={purchasesList}
+        getSystemDate={getSystemDate}
+        showToast={showToast}
+        onBack={() => setActiveTab('dashboard')}
       />
     );
   }
@@ -4145,6 +4977,8 @@ Branch: ${supp.branch_name || 'N/A'}`;
         setSuppliers={setSuppliers}
         customers={customers}
         setCustomers={setCustomers}
+        purchasesList={purchasesList}
+        setActiveTab={setActiveTab}
         showToast={showToast}
         setIsCustomerModalOpen={setIsCustomerModalOpen}
         setIsSupplierTrucksModalOpen={setIsSupplierTrucksModalOpen}
@@ -4869,7 +5703,7 @@ Branch: ${supp.branch_name || 'N/A'}`;
                         <div style={{ fontSize: '0.76rem', color: 'var(--text-secondary)', marginTop: '3px', display: 'flex', alignItems: 'center', gap: '8px' }}>
                           <span>📞 {profile.phone || 'No phone'}</span>
                           <span>•</span>
-                          <span>📅 {profile.date}</span>
+                          <span>📅 {formatDisplayDate(profile.date)}</span>
                         </div>
                       </div>
 
@@ -4943,7 +5777,7 @@ Branch: ${supp.branch_name || 'N/A'}`;
                       <div>
                         <div className="profile-field-label">Arrival Date</div>
                         <div className="profile-field-value" style={{ fontSize: '0.85rem' }}>
-                          {profile.date}
+                          {formatDisplayDate(profile.date)}
                         </div>
                       </div>
 
@@ -5457,53 +6291,31 @@ Branch: ${supp.branch_name || 'N/A'}`;
             onClick={(e) => e.stopPropagation()}
           >
             {/* Modal Header */}
-            <div className="mandi-modal-header">
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <div style={{
-                  width: '38px',
-                  height: '38px',
-                  borderRadius: '10px',
-                  background: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  color: '#fff'
-                }}>
+            <div className="mandi-modal-header customer-modal-header">
+              <div className="customer-header-main-col">
+                <div className="customer-header-icon">
                   <Users size={20} />
                 </div>
-                <div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <h3 style={{ margin: 0, fontSize: '1.2rem', fontWeight: 800, color: 'var(--text-main)' }}>
+                <div className="customer-header-info">
+                  <div className="customer-header-title-row">
+                    <h3 className="customer-header-title">
                       Customer Profiles & Khata Ledgers
                     </h3>
                     <span className="badge badge-success hide-on-mobile" style={{ fontSize: '0.68rem', display: 'inline-flex', alignItems: 'center', gap: '3px', background: 'rgba(16, 185, 129, 0.12)', color: '#10b981', border: '1px solid rgba(16, 185, 129, 0.3)' }}>
                       <ShieldCheck size={11} /> Authenticated • MySQL Live
                     </span>
                   </div>
-                  <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                  <div className="customer-header-subtitle">
                     Single customer profile with complete Buy (Kharidari) and Payment (Jama) history
                   </div>
                 </div>
               </div>
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <div className="customer-header-actions-col">
                 <button
                   type="button"
-                  className="btn btn-sm"
+                  className="btn btn-sm customer-btn-clear"
                   onClick={handleClearAllCustomers}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '5px',
-                    fontSize: '0.8rem',
-                    background: 'rgba(239, 68, 68, 0.1)',
-                    color: '#ef4444',
-                    border: '1px solid rgba(239, 68, 68, 0.3)',
-                    borderRadius: '8px',
-                    padding: '6px 12px',
-                    fontWeight: 700,
-                    cursor: 'pointer'
-                  }}
                   title="Delete all customer profiles and khata ledgers"
                 >
                   <Trash2 size={14} />
@@ -5512,19 +6324,18 @@ Branch: ${supp.branch_name || 'N/A'}`;
 
                 <button
                   type="button"
-                  className="btn btn-primary btn-sm"
+                  className="btn btn-primary btn-sm customer-btn-add"
                   onClick={() => setIsAddCustomerOpen(true)}
-                  style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.8rem' }}
                 >
                   <Plus size={14} />
-                  <span>+ New Customer</span>
+                  <span>New Customer</span>
                 </button>
 
                 <button
                   type="button"
-                  className="btn-icon"
+                  className="btn-icon customer-btn-close"
                   onClick={() => setIsCustomerModalOpen(false)}
-                  style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer' }}
+                  title="Close modal"
                 >
                   <X size={20} />
                 </button>
@@ -5534,42 +6345,42 @@ Branch: ${supp.branch_name || 'N/A'}`;
             {/* Modal Body: Split Layout */}
             <div className="mandi-modal-body" style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
               {/* Summary Stats Row */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '12px' }}>
+              <div className="khata-summary-stats-grid">
                 <div className="khata-stat-card">
-                  <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: 700 }}>
+                  <span className="khata-stat-label" style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: 700 }}>
                     Total Customers
                   </span>
-                  <span style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--text-main)' }}>
+                  <span className="khata-stat-value" style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--text-main)' }}>
                     {customerProfiles.length}
                   </span>
                 </div>
 
                 <div className="khata-stat-card" style={{ borderLeft: '3px solid #ef4444' }}>
-                  <span style={{ fontSize: '0.72rem', color: '#ef4444', textTransform: 'uppercase', fontWeight: 700 }}>
+                  <span className="khata-stat-label" style={{ fontSize: '0.72rem', color: '#ef4444', textTransform: 'uppercase', fontWeight: 700 }}>
                     Total Khata Udhaar (Pending)
                   </span>
-                  <span style={{ fontSize: '1.25rem', fontWeight: 900, color: '#ef4444' }}>
+                  <span className="khata-stat-value" style={{ fontSize: '1.25rem', fontWeight: 900, color: '#ef4444' }}>
                     ₹{totalCustomerDues.toLocaleString()}
                   </span>
                 </div>
 
                 <div className="khata-stat-card" style={{ borderLeft: '3px solid #10b981' }}>
-                  <span style={{ fontSize: '0.72rem', color: '#10b981', textTransform: 'uppercase', fontWeight: 700 }}>
-                    Total Boxes Sold
+                  <span className="khata-stat-label" style={{ fontSize: '0.72rem', color: '#10b981', textTransform: 'uppercase', fontWeight: 700 }}>
+                    Total Received
                   </span>
-                  <span style={{ fontSize: '1.25rem', fontWeight: 800, color: '#10b981' }}>
-                    {totalCustomerBoxes.toLocaleString()} BX
+                  <span className="khata-stat-value" style={{ fontSize: '1.25rem', fontWeight: 900, color: '#10b981' }}>
+                    ₹{totalCustomerReceived.toLocaleString()}
                   </span>
                 </div>
               </div>
 
               {/* Customer Directory Search Bar */}
-              <div style={{ position: 'relative' }}>
+              <div style={{ position: 'relative', width: '100%' }}>
                 <input
                   type="text"
                   className="form-control"
                   placeholder="Search customer by name, phone, or city..."
-                  style={{ paddingLeft: '34px', fontSize: '0.88rem', height: '42px' }}
+                  style={{ paddingLeft: '34px', fontSize: '0.88rem', height: '42px', width: '100%', boxSizing: 'border-box' }}
                   value={customerSearchQuery}
                   onChange={(e) => setCustomerSearchQuery(e.target.value)}
                 />
@@ -5595,22 +6406,27 @@ Branch: ${supp.branch_name || 'N/A'}`;
                   </div>
                 ) : (
                   filteredCustomerDirectory.map(c => {
-                    const due = Number(c.current_balance || 0);
-                    const bought = Number(c.total_bought || 0);
-                    const boxes = Number(c.total_boxes || 0);
-
                     return (
                       <div
                         key={c.id}
-                        className="customer-directory-card"
-                        style={{ height: 'auto', minHeight: 'fit-content' }}
+                        className="customer-directory-card compact-customer-card"
+                        style={{
+                          height: 'auto',
+                          minHeight: 'fit-content',
+                          padding: '12px 14px',
+                          borderRadius: '12px',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '10px'
+                        }}
                         onClick={() => {
                           setSelectedCustomerForView(c);
                           setIsPaymentDrawerOpen(false);
+                          setSelectedBuyDateDetails(null);
                           setIsCustomerDetailPopupOpen(true);
                         }}
                       >
-                        {/* Card Header: Avatar + Customer Name + Due Badge & Delete Button */}
+                        {/* Card Header: Avatar + Customer Name/Phone (Left) & Actions (Right) */}
                         <div style={{
                           display: 'flex',
                           alignItems: 'center',
@@ -5646,7 +6462,7 @@ Branch: ${supp.branch_name || 'N/A'}`;
                             <div style={{ minWidth: 0, flex: 1, overflow: 'hidden' }}>
                               <div style={{
                                 fontWeight: 800,
-                                fontSize: '0.92rem',
+                                fontSize: '0.94rem',
                                 color: 'var(--text-main)',
                                 whiteSpace: 'nowrap',
                                 overflow: 'hidden',
@@ -5682,19 +6498,6 @@ Branch: ${supp.branch_name || 'N/A'}`;
                             gap: '5px',
                             flexShrink: 0
                           }}>
-                            <span
-                              className={`badge ${due > 0 ? 'badge-warning' : 'badge-success'}`}
-                              style={{
-                                fontSize: '0.68rem',
-                                fontWeight: 800,
-                                padding: '3px 8px',
-                                borderRadius: '20px',
-                                whiteSpace: 'nowrap',
-                                flexShrink: 0
-                              }}
-                            >
-                              {due > 0 ? `Due: ₹${due.toLocaleString()}` : 'Cleared'}
-                            </span>
                             <button
                               type="button"
                               onClick={(e) => {
@@ -5706,15 +6509,21 @@ Branch: ${supp.branch_name || 'N/A'}`;
                                 background: 'rgba(59, 130, 246, 0.08)',
                                 border: '1px solid rgba(59, 130, 246, 0.25)',
                                 color: '#3b82f6',
-                                borderRadius: '6px',
-                                width: '26px',
-                                height: '26px',
+                                borderRadius: '5px',
+                                width: '22px',
+                                height: '22px',
+                                minWidth: '22px',
+                                maxWidth: '22px',
+                                minHeight: '22px',
+                                maxHeight: '22px',
                                 padding: 0,
                                 cursor: 'pointer',
                                 display: 'inline-flex',
                                 alignItems: 'center',
                                 justifyContent: 'center',
                                 flexShrink: 0,
+                                alignSelf: 'center',
+                                lineHeight: 1,
                                 transition: 'all 0.15s ease'
                               }}
                               onMouseEnter={(e) => {
@@ -5726,69 +6535,8 @@ Branch: ${supp.branch_name || 'N/A'}`;
                                 e.currentTarget.style.borderColor = 'rgba(59, 130, 246, 0.25)';
                               }}
                             >
-                              <Edit size={13} />
+                              <Edit size={12} />
                             </button>
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleDeleteSingleCustomer(c);
-                              }}
-                              title={`Delete profile of ${c.customer_name}`}
-                              style={{
-                                background: 'rgba(239, 68, 68, 0.08)',
-                                border: '1px solid rgba(239, 68, 68, 0.25)',
-                                color: '#ef4444',
-                                borderRadius: '6px',
-                                width: '26px',
-                                height: '26px',
-                                padding: 0,
-                                cursor: 'pointer',
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                flexShrink: 0,
-                                transition: 'all 0.15s ease'
-                              }}
-                              onMouseEnter={(e) => {
-                                e.currentTarget.style.background = 'rgba(239, 68, 68, 0.2)';
-                                e.currentTarget.style.borderColor = '#ef4444';
-                              }}
-                              onMouseLeave={(e) => {
-                                e.currentTarget.style.background = 'rgba(239, 68, 68, 0.08)';
-                                e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.25)';
-                              }}
-                            >
-                              <Trash2 size={13} />
-                            </button>
-                          </div>
-                        </div>
-
-                        {/* Financial Snapshot */}
-                        <div style={{
-                          display: 'grid',
-                          gridTemplateColumns: '1fr 1fr',
-                          gap: '10px',
-                          background: 'var(--bg-main)',
-                          padding: '10px 12px',
-                          borderRadius: '10px',
-                          border: '1px solid var(--border-subtle)'
-                        }}>
-                          <div style={{ minWidth: 0 }}>
-                            <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.03em' }}>
-                              Purchases ({boxes} BX)
-                            </div>
-                            <div style={{ fontSize: '0.92rem', fontWeight: 800, color: 'var(--text-main)', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                              ₹{bought.toLocaleString()}
-                            </div>
-                          </div>
-                          <div style={{ minWidth: 0, textAlign: 'right' }}>
-                            <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.03em' }}>
-                              Khata Balance
-                            </div>
-                            <div style={{ fontSize: '0.92rem', fontWeight: 900, color: due > 0 ? '#ef4444' : '#10b981', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                              ₹{due.toLocaleString()}
-                            </div>
                           </div>
                         </div>
 
@@ -5797,16 +6545,16 @@ Branch: ${supp.branch_name || 'N/A'}`;
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: 'space-between',
-                          paddingTop: '8px',
+                          paddingTop: '6px',
                           borderTop: '1px solid var(--border-subtle)',
-                          fontSize: '0.78rem',
+                          fontSize: '0.74rem',
                           color: '#3b82f6',
                           fontWeight: 700
                         }}>
-                          <span style={{ color: 'var(--text-secondary)', fontSize: '0.74rem' }}>
-                            {c.buy_history?.length || 0} Orders • {c.payment_history?.length || 0} Payments
+                          <span style={{ color: 'var(--text-secondary)', fontSize: '0.72rem' }}>
+                            {c.buy_history?.length || 0} Orders
                           </span>
-                          <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <span style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
                             View Khata Details →
                           </span>
                         </div>
@@ -5864,27 +6612,6 @@ Branch: ${supp.branch_name || 'N/A'}`;
                     <h2 style={{ margin: 0, fontSize: '1.2rem', fontWeight: 800, color: 'var(--text-main)' }}>
                       {selectedCustomerForView.customer_name}
                     </h2>
-                    <button
-                      type="button"
-                      onClick={() => handleOpenEditCustomer(selectedCustomerForView)}
-                      title="Edit Customer Profile"
-                      style={{
-                        background: 'rgba(59, 130, 246, 0.1)',
-                        border: '1px solid rgba(59, 130, 246, 0.25)',
-                        color: '#3b82f6',
-                        borderRadius: '6px',
-                        padding: '3px 8px',
-                        cursor: 'pointer',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '4px',
-                        fontSize: '0.72rem',
-                        fontWeight: 700
-                      }}
-                    >
-                      <Edit2 size={12} />
-                      <span>Edit</span>
-                    </button>
                     <span className="badge badge-success hide-on-mobile" style={{ fontSize: '0.68rem', display: 'inline-flex', alignItems: 'center', gap: '3px', background: 'rgba(16, 185, 129, 0.12)', color: '#10b981', border: '1px solid rgba(16, 185, 129, 0.3)' }}>
                       <ShieldCheck size={11} /> Authenticated • MySQL Live
                     </span>
@@ -5903,55 +6630,6 @@ Branch: ${supp.branch_name || 'N/A'}`;
 
               {/* Action Buttons */}
               <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                <button
-                  type="button"
-                  className="btn btn-primary btn-sm"
-                  onClick={() => setIsPaymentDrawerOpen(!isPaymentDrawerOpen)}
-                  style={{
-                    background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-                    border: 'none',
-                    color: '#fff',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px'
-                  }}
-                >
-                  <DollarSign size={14} />
-                  <span>{isPaymentDrawerOpen ? 'Cancel Payment' : 'Receive Payment (Jama)'}</span>
-                </button>
-
-                <button
-                  type="button"
-                  className="btn btn-outline btn-sm"
-                  onClick={() => handleOpenEditCustomer(selectedCustomerForView)}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '5px',
-                    padding: '6px 12px',
-                    fontSize: '0.82rem',
-                    fontWeight: 700,
-                    borderRadius: '8px',
-                    border: '1px solid var(--border-subtle)',
-                    background: 'var(--bg-surface)',
-                    color: 'var(--text-main)',
-                    cursor: 'pointer'
-                  }}
-                  title="Edit Customer Profile"
-                >
-                  <Edit size={14} color="#3b82f6" />
-                  <span>Edit Profile</span>
-                </button>
-
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm"
-                  onClick={() => window.print()}
-                  title="Print Customer Ledger Statement"
-                >
-                  <Printer size={14} />
-                  <span className="hide-on-mobile">Print</span>
-                </button>
 
                 <button
                   type="button"
@@ -5973,57 +6651,41 @@ Branch: ${supp.branch_name || 'N/A'}`;
                   <Trash2 size={14} />
                   <span className="hide-on-mobile">Delete</span>
                 </button>
-
-                <button
-                  type="button"
-                  className="btn-icon"
-                  onClick={() => setIsCustomerDetailPopupOpen(false)}
-                  style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: '4px' }}
-                >
-                  <X size={20} />
-                </button>
               </div>
             </div>
 
             {/* Detail Body */}
             <div className="mandi-modal-body" style={{ padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: '16px', overflowY: 'auto' }}>
-              {/* Customer Stat Cards */}
-              <div className="khata-stat-grid">
+              {/* Customer Stat Cards: 3-column Grid for Total Purchases, Total Paid, Current Khata Due */}
+              <div className="customer-detail-stat-grid">
                 <div className="khata-stat-card">
-                  <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: 700 }}>
-                    Boxes Bought
-                  </span>
-                  <span style={{ fontSize: '1.15rem', fontWeight: 800, color: '#3b82f6' }}>
-                    {selectedCustomerForView.total_boxes || 0} BX
-                  </span>
-                </div>
-
-                <div className="khata-stat-card">
-                  <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: 700 }}>
+                  <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: 700 }}>
                     Total Purchases
                   </span>
-                  <span style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--text-main)' }}>
+                  <span style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--text-main)', marginTop: '2px' }}>
                     ₹{Number(selectedCustomerForView.total_bought || 0).toLocaleString()}
                   </span>
                 </div>
 
-                <div className="khata-stat-card">
-                  <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: 700 }}>
+                <div className="khata-stat-card" style={{ borderLeft: '3px solid #10b981' }}>
+                  <span style={{ fontSize: '0.72rem', color: '#10b981', textTransform: 'uppercase', fontWeight: 700 }}>
                     Total Paid
                   </span>
-                  <span style={{ fontSize: '1.15rem', fontWeight: 800, color: '#10b981' }}>
-                    ₹{Number(selectedCustomerForView.total_paid || 0).toLocaleString()}
+                  <span style={{ fontSize: '1.25rem', fontWeight: 800, color: '#10b981', marginTop: '2px' }}>
+                    ₹{Number(selectedCustomerForView.total_paid ?? ((selectedCustomerForView.payment_history && selectedCustomerForView.payment_history.length > 0)
+                      ? selectedCustomerForView.payment_history.reduce((s, p) => s + (Number(p.amount) || 0), 0)
+                      : Math.max(0, Number(selectedCustomerForView.total_bought || 0) - Number(selectedCustomerForView.current_balance || 0)))).toLocaleString()}
                   </span>
                 </div>
 
                 <div className="khata-stat-card" style={{
-                  background: Number(selectedCustomerForView.current_balance || 0) > 0 ? 'rgba(239, 68, 68, 0.1)' : 'rgba(16, 185, 129, 0.1)',
-                  border: `1.5px solid ${Number(selectedCustomerForView.current_balance || 0) > 0 ? 'rgba(239, 68, 68, 0.3)' : 'rgba(16, 185, 129, 0.3)'}`
+                  borderLeft: Number(selectedCustomerForView.current_balance || 0) > 0 ? '3px solid #ef4444' : '3px solid #10b981',
+                  background: Number(selectedCustomerForView.current_balance || 0) > 0 ? 'rgba(239, 68, 68, 0.06)' : 'rgba(16, 185, 129, 0.06)'
                 }}>
-                  <span style={{ fontSize: '0.7rem', color: Number(selectedCustomerForView.current_balance || 0) > 0 ? '#ef4444' : '#10b981', textTransform: 'uppercase', fontWeight: 800 }}>
+                  <span style={{ fontSize: '0.72rem', color: Number(selectedCustomerForView.current_balance || 0) > 0 ? '#ef4444' : '#10b981', textTransform: 'uppercase', fontWeight: 800 }}>
                     Current Khata Due
                   </span>
-                  <span style={{ fontSize: '1.15rem', fontWeight: 900, color: Number(selectedCustomerForView.current_balance || 0) > 0 ? '#ef4444' : '#10b981' }}>
+                  <span style={{ fontSize: '1.25rem', fontWeight: 900, color: Number(selectedCustomerForView.current_balance || 0) > 0 ? '#ef4444' : '#10b981', marginTop: '2px' }}>
                     ₹{Number(selectedCustomerForView.current_balance || 0).toLocaleString()}
                   </span>
                 </div>
@@ -6139,57 +6801,89 @@ Branch: ${supp.branch_name || 'N/A'}`;
                 </button>
               </div>
 
-              {/* Tab 1: Buy History Table */}
+              {/* Tab 1: Buy History Date-Wise */}
               {activeCustomerTab === 'buy' && (
                 <div>
-                  {(!selectedCustomerForView.buy_history || selectedCustomerForView.buy_history.length === 0) ? (
+                  {dateWiseBuyHistory.length === 0 ? (
                     <div style={{ textAlign: 'center', padding: '32px 10px', color: 'var(--text-secondary)', fontSize: '0.84rem' }}>
                       No purchase history recorded for this customer yet.
                     </div>
                   ) : (
-                    <div className="erp-table-wrapper" style={{ margin: 0, border: '1px solid var(--border-subtle)', borderRadius: '10px', overflowX: 'auto', background: 'var(--bg-surface)' }}>
-                      <table className="erp-table" style={{ width: '100%', fontSize: '0.84rem', margin: 0, minWidth: '650px', borderCollapse: 'collapse' }}>
-                        <thead>
-                          <tr>
-                            <th style={{ textAlign: 'left', padding: '12px 14px', width: '110px' }}>Date</th>
-                            <th style={{ textAlign: 'left', padding: '12px 14px' }}>Product (Fruit & Variety)</th>
-                            <th style={{ textAlign: 'left', padding: '12px 14px', width: '120px' }}>Truck No</th>
-                            <th style={{ textAlign: 'center', padding: '12px 14px', width: '90px' }}>Boxes</th>
-                            <th style={{ textAlign: 'right', padding: '12px 14px', width: '110px' }}>Rate / Box</th>
-                            <th style={{ textAlign: 'right', padding: '12px 14px', width: '120px' }}>Total (₹)</th>
-                            <th style={{ textAlign: 'center', padding: '12px 14px', width: '120px' }}>Payment Mode</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {selectedCustomerForView.buy_history.map(item => (
-                            <tr key={item.id}>
-                              <td style={{ textAlign: 'left', padding: '12px 14px', whiteSpace: 'nowrap', fontWeight: 600 }}>
-                                {item.date}
-                              </td>
-                              <td style={{ textAlign: 'left', padding: '12px 14px', fontWeight: 700, color: 'var(--text-main)' }}>
-                                {item.product_name}
-                              </td>
-                              <td style={{ textAlign: 'left', padding: '12px 14px', fontFamily: 'monospace', color: '#3b82f6', fontWeight: 700 }}>
-                                {item.truck_no}
-                              </td>
-                              <td style={{ textAlign: 'center', padding: '12px 14px', fontWeight: 800, color: '#10b981' }}>
-                                {item.boxes} BX
-                              </td>
-                              <td style={{ textAlign: 'right', padding: '12px 14px', fontWeight: 600 }}>
-                                ₹{Number(item.rate_per_box).toLocaleString()}
-                              </td>
-                              <td style={{ textAlign: 'right', padding: '12px 14px', fontWeight: 800, color: 'var(--text-main)' }}>
-                                ₹{Number(item.total).toLocaleString()}
-                              </td>
-                              <td style={{ textAlign: 'center', padding: '12px 14px' }}>
-                                <span className={`badge ${item.payment_mode === 'CREDIT' ? 'badge-warning' : 'badge-success'}`} style={{ fontSize: '0.72rem', padding: '3px 9px' }}>
-                                  {item.payment_mode}
-                                </span>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(290px, 1fr))', gap: '12px' }}>
+                      {dateWiseBuyHistory.map(group => {
+                        const avgRate = group.totalBoxes > 0 ? Math.round(group.totalAmount / group.totalBoxes) : 0;
+                        return (
+                          <div
+                            key={group.date}
+                            onClick={() => setSelectedBuyDateDetails(group)}
+                            style={{
+                              background: 'var(--bg-card, var(--bg-surface))',
+                              border: '1.5px solid var(--border-subtle)',
+                              borderRadius: '12px',
+                              padding: '14px 16px',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: '10px',
+                              cursor: 'pointer',
+                              boxShadow: '0 2px 8px rgba(0, 0, 0, 0.04)',
+                              transition: 'all 0.18s ease'
+                            }}
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.borderColor = '#3b82f6';
+                              e.currentTarget.style.transform = 'translateY(-2px)';
+                              e.currentTarget.style.boxShadow = '0 6px 18px rgba(59, 130, 246, 0.15)';
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.borderColor = 'var(--border-subtle)';
+                              e.currentTarget.style.transform = 'translateY(0)';
+                              e.currentTarget.style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.04)';
+                            }}
+                          >
+                            {/* Card Top: Date & Total Amount */}
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '10px' }}>
+                              <div>
+                                <div style={{ fontWeight: 800, fontSize: '1rem', color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                  <Calendar size={15} color="#3b82f6" />
+                                  <span>{formatDisplayDate(group.date)}</span>
+                                </div>
+                                <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', marginTop: '3px' }}>
+                                  {group.items.length} {group.items.length === 1 ? 'Order' : 'Orders'} • Click to view →
+                                </div>
+                              </div>
+
+                              <div style={{ textAlign: 'right' }}>
+                                <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: 700 }}>
+                                  Total
+                                </div>
+                                <div style={{ fontSize: '1.15rem', fontWeight: 900, color: 'var(--text-main)' }}>
+                                  ₹{group.totalAmount.toLocaleString()}
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Card Bottom: Total Box / Per Box Price */}
+                            <div style={{
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'center',
+                              padding: '9px 12px',
+                              background: 'var(--bg-main)',
+                              borderRadius: '8px',
+                              border: '1px solid var(--border-subtle)',
+                              fontSize: '0.82rem'
+                            }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                <span style={{ color: 'var(--text-secondary)' }}>Total Box:</span>
+                                <strong style={{ color: '#10b981', fontWeight: 800, fontSize: '0.9rem' }}>{group.totalBoxes} BX</strong>
+                              </div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                <span style={{ color: 'var(--text-secondary)' }}>Per Box Price:</span>
+                                <strong style={{ color: 'var(--text-main)', fontWeight: 800 }}>₹{avgRate.toLocaleString()} / BX</strong>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -6218,7 +6912,7 @@ Branch: ${supp.branch_name || 'N/A'}`;
                           {selectedCustomerForView.payment_history.map(p => (
                             <tr key={p.id}>
                               <td style={{ textAlign: 'left', padding: '12px 14px', whiteSpace: 'nowrap', fontWeight: 600 }}>
-                                {p.date}
+                                {formatDisplayDate(p.date)}
                               </td>
                               <td style={{ textAlign: 'right', padding: '12px 14px', fontWeight: 800, color: '#10b981', fontSize: '0.92rem' }}>
                                 ₹{Number(p.amount).toLocaleString()}
@@ -6245,16 +6939,14 @@ Branch: ${supp.branch_name || 'N/A'}`;
             </div>
 
             {/* Modal Footer */}
-            <div className="mandi-modal-footer" style={{ padding: '12px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-main)' }}>
-                Current Balance: <span style={{ color: Number(selectedCustomerForView.current_balance || 0) > 0 ? '#ef4444' : '#10b981' }}>
-                  ₹{Number(selectedCustomerForView.current_balance || 0).toLocaleString()}
-                </span>
-              </div>
+            <div className="mandi-modal-footer" style={{ padding: '12px 20px', display: 'flex', justifyContent: 'flex-end', alignItems: 'center' }}>
               <button
                 type="button"
                 className="btn btn-secondary btn-sm"
-                onClick={() => setIsCustomerDetailPopupOpen(false)}
+                onClick={() => {
+                  setSelectedBuyDateDetails(null);
+                  setIsCustomerDetailPopupOpen(false);
+                }}
               >
                 Close Details
               </button>
@@ -6262,6 +6954,631 @@ Branch: ${supp.branch_name || 'N/A'}`;
           </div>
         </div>
       )}
+
+      {/* ----------------------------------------------------------------- */}
+      {/* Date-Wise Buy History Detail Popup Modal */}
+      {/* ----------------------------------------------------------------- */}
+      {selectedBuyDateDetails && (
+        <div
+          className="mandi-modal-backdrop"
+          style={{
+            zIndex: 10500,
+            background: 'rgba(0, 0, 0, 0.65)',
+            backdropFilter: 'blur(3px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '16px'
+          }}
+          onClick={() => setSelectedBuyDateDetails(null)}
+        >
+          <div
+            className="mandi-modal-dialog"
+            style={{
+              width: '100%',
+              maxWidth: '680px',
+              maxHeight: '85vh',
+              margin: 'auto',
+              display: 'flex',
+              flexDirection: 'column',
+              borderRadius: '16px',
+              boxShadow: '0 20px 50px rgba(0,0,0,0.3)',
+              border: '1.5px solid var(--border-subtle)',
+              background: 'var(--bg-surface)'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Date Popup Header */}
+            <div className="mandi-modal-header" style={{ padding: '14px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-subtle)' }}>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <div style={{ width: '30px', height: '30px', borderRadius: '8px', background: 'rgba(59, 130, 246, 0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#3b82f6' }}>
+                    <Calendar size={16} />
+                  </div>
+                  <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 800, color: 'var(--text-main)' }}>
+                    Buy History — {formatDisplayDate(selectedBuyDateDetails.date)}
+                  </h3>
+                </div>
+                <div style={{ fontSize: '0.76rem', color: 'var(--text-secondary)', marginTop: '3px' }}>
+                  {selectedCustomerForView?.customer_name} • {selectedBuyDateDetails.items.length} {selectedBuyDateDetails.items.length === 1 ? 'Item' : 'Items'} • Total {selectedBuyDateDetails.totalBoxes} Boxes
+                </div>
+              </div>
+
+              <button
+                type="button"
+                className="btn-icon"
+                onClick={() => {
+                  setSelectedBuyDateDetails(null);
+                  setIsBillSelectMode(false);
+                  setSelectedBillItemIds([]);
+                }}
+                style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: '4px' }}
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Sub-bar directly under Buy History navbar: Bill Option & Selection Bar */}
+            <div style={{
+              padding: '10px 20px',
+              background: 'var(--bg-main)',
+              borderBottom: '1.5px solid var(--border-subtle)',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              flexWrap: 'wrap',
+              gap: '10px'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!isBillSelectMode) {
+                      setIsBillSelectMode(true);
+                      setSelectedBillItemIds(selectedBuyDateDetails.items.map((it, idx) => it.id || idx));
+                    } else {
+                      setIsBillSelectMode(false);
+                      setSelectedBillItemIds([]);
+                    }
+                  }}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    background: isBillSelectMode ? 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)' : 'var(--bg-surface)',
+                    color: isBillSelectMode ? '#ffffff' : '#2563eb',
+                    border: '1.5px solid #2563eb',
+                    padding: '6px 14px',
+                    borderRadius: '8px',
+                    fontSize: '0.82rem',
+                    fontWeight: 800,
+                    cursor: 'pointer',
+                    boxShadow: isBillSelectMode ? '0 4px 12px rgba(37, 99, 235, 0.25)' : '0 1px 3px rgba(0,0,0,0.05)',
+                    transition: 'all 0.15s ease'
+                  }}
+                >
+                  <FileText size={15} />
+                  <span>{isBillSelectMode ? '✓ Bill Select Mode' : '🧾 Bill'}</span>
+                </button>
+
+                {isBillSelectMode && (
+                  <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', fontWeight: 600 }}>
+                    Tick items to include in bill
+                  </span>
+                )}
+              </div>
+
+              {isBillSelectMode && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                  <label style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    fontSize: '0.78rem',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    color: 'var(--text-main)',
+                    userSelect: 'none'
+                  }}>
+                    <input
+                      type="checkbox"
+                      checked={selectedBillItemIds.length === selectedBuyDateDetails.items.length && selectedBuyDateDetails.items.length > 0}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedBillItemIds(selectedBuyDateDetails.items.map((it, idx) => it.id || idx));
+                        } else {
+                          setSelectedBillItemIds([]);
+                        }
+                      }}
+                      style={{ width: '16px', height: '16px', cursor: 'pointer', accentColor: '#2563eb' }}
+                    />
+                    <span>Select All ({selectedBillItemIds.length}/{selectedBuyDateDetails.items.length})</span>
+                  </label>
+
+                  <button
+                    type="button"
+                    disabled={selectedBillItemIds.length === 0}
+                    onClick={handleOpenSelectedBill}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      background: selectedBillItemIds.length === 0 ? '#94a3b8' : 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                      color: '#ffffff',
+                      border: 'none',
+                      padding: '6px 14px',
+                      borderRadius: '8px',
+                      fontSize: '0.8rem',
+                      fontWeight: 800,
+                      cursor: selectedBillItemIds.length === 0 ? 'not-allowed' : 'pointer',
+                      boxShadow: selectedBillItemIds.length === 0 ? 'none' : '0 4px 12px rgba(16, 185, 129, 0.3)',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    <Receipt size={14} />
+                    <span>Generate Bill ({selectedBillItemIds.length})</span>
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Date Popup Body: List of all purchases for this date as horizontal rows */}
+            <div className="mandi-modal-body" style={{ padding: '16px 20px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              {selectedBuyDateDetails.items.map((item, idx) => {
+                const itemKey = item.id || idx;
+                const isSelected = selectedBillItemIds.includes(itemKey);
+                return (
+                  <div
+                    key={itemKey}
+                    className="buy-history-item-row"
+                    onClick={() => {
+                      if (isBillSelectMode) {
+                        toggleItemSelection(itemKey);
+                      }
+                    }}
+                    style={{
+                      background: isBillSelectMode && isSelected
+                        ? 'linear-gradient(135deg, rgba(37, 99, 235, 0.05) 0%, var(--bg-card) 100%)'
+                        : 'var(--bg-card, var(--bg-surface))',
+                      border: isBillSelectMode && isSelected
+                        ? '2px solid #2563eb'
+                        : '1.5px solid var(--border-subtle)',
+                      boxShadow: isBillSelectMode && isSelected ? '0 4px 14px rgba(37, 99, 235, 0.12)' : '0 2px 6px rgba(0, 0, 0, 0.04)',
+                      cursor: isBillSelectMode ? 'pointer' : 'default'
+                    }}
+                  >
+                    {/* Bill Select Checkbox */}
+                    {isBillSelectMode && (
+                      <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center' }} onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => toggleItemSelection(itemKey)}
+                          style={{
+                            width: '18px',
+                            height: '18px',
+                            cursor: 'pointer',
+                            accentColor: '#2563eb'
+                          }}
+                        />
+                      </div>
+                    )}
+
+                    {/* 1. Fruit Name (with Truck badge) */}
+                    <div className="buy-item-product-col">
+                      <span style={{ fontWeight: 800, fontSize: '0.98rem', color: 'var(--text-main)', letterSpacing: '-0.01em' }}>
+                        {item.product_name}
+                      </span>
+                      {item.truck_no && (
+                        <span style={{
+                          fontSize: '0.72rem',
+                          color: '#2563eb',
+                          background: 'rgba(37, 99, 235, 0.1)',
+                          padding: '2px 7px',
+                          borderRadius: '5px',
+                          fontFamily: 'monospace',
+                          fontWeight: 700,
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '3px'
+                        }}>
+                          🚚 {item.truck_no}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* 2. Total Box * Per Box Price */}
+                    <div className="buy-item-calc-col">
+                      <span style={{ color: '#10b981', fontWeight: 800 }}>{item.boxes} BX</span>
+                      <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>×</span>
+                      <span style={{ color: 'var(--text-main)', fontWeight: 800 }}>₹{Number(item.rate_per_box).toLocaleString()}</span>
+                    </div>
+
+                    {/* 3. Total with Mode */}
+                    <div className="buy-item-total-col">
+                      <span style={{ fontSize: '1.1rem', fontWeight: 900, color: 'var(--text-main)', letterSpacing: '-0.01em' }}>
+                        ₹{Number(item.total).toLocaleString()}
+                      </span>
+                      <span
+                        className={`badge ${item.payment_mode === 'CREDIT' ? 'badge-warning' : 'badge-success'}`}
+                        style={{
+                          fontSize: '0.72rem',
+                          padding: '3px 8px',
+                          fontWeight: 800,
+                          borderRadius: '6px',
+                          letterSpacing: '0.02em',
+                          textTransform: 'uppercase'
+                        }}
+                      >
+                        Mode: {item.payment_mode || 'CREDIT'}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Date Popup Footer */}
+            <div className="mandi-modal-footer" style={{ padding: '12px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid var(--border-subtle)', background: 'var(--bg-surface)' }}>
+              <div style={{ fontSize: '0.88rem', fontWeight: 800, color: 'var(--text-main)' }}>
+                Day Total: <span style={{ color: '#10b981' }}>₹{selectedBuyDateDetails.totalAmount.toLocaleString()}</span> ({selectedBuyDateDetails.totalBoxes} Boxes)
+              </div>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => {
+                  setSelectedBuyDateDetails(null);
+                  setIsBillSelectMode(false);
+                  setSelectedBillItemIds([]);
+                }}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ----------------------------------------------------------------- */}
+      {/* Particular Buy Item / Multi-Item Bill & Payment Modal             */}
+      {/* ----------------------------------------------------------------- */}
+      {(selectedItemsForBill || selectedItemForBill) && (() => {
+        const billItems = selectedItemsForBill || (selectedItemForBill ? [selectedItemForBill] : []);
+        const totalBillBoxes = billItems.reduce((acc, it) => acc + Number(it.boxes || 0), 0);
+        const totalBillAmount = billItems.reduce((acc, it) => acc + Number(it.total || 0), 0);
+        const totalBillCash = billItems.filter(it => it.payment_mode === 'CASH').reduce((acc, it) => acc + Number(it.total || 0), 0);
+        const totalBillCredit = billItems.filter(it => it.payment_mode === 'CREDIT').reduce((acc, it) => acc + Number(it.total || 0), 0);
+        const hasCreditItems = totalBillCredit > 0;
+
+        return (
+          <div
+            className="mandi-modal-backdrop bill-modal-backdrop"
+            style={{
+              zIndex: 10600,
+              background: 'rgba(0, 0, 0, 0.7)',
+              backdropFilter: 'blur(4px)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '16px'
+            }}
+            onClick={() => {
+              setSelectedItemsForBill(null);
+              setSelectedItemForBill(null);
+            }}
+          >
+            <div
+              className="mandi-modal-dialog bill-modal-dialog"
+              style={{
+                width: '100%',
+                maxWidth: '620px',
+                maxHeight: '92vh',
+                margin: 'auto',
+                display: 'flex',
+                flexDirection: 'column',
+                borderRadius: '16px',
+                boxShadow: '0 25px 60px rgba(0,0,0,0.35)',
+                border: '1.5px solid var(--border-subtle)',
+                background: 'var(--bg-surface)',
+                overflow: 'hidden'
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Bill Header Bar */}
+              <div className="mandi-modal-header bill-modal-header" style={{
+                padding: '14px 20px',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                borderBottom: '1px solid var(--border-subtle)',
+                background: 'var(--bg-card)'
+              }}>
+                <div className="bill-header-left" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <div style={{
+                    width: '32px',
+                    height: '32px',
+                    borderRadius: '8px',
+                    background: 'rgba(16, 185, 129, 0.14)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: '#10b981',
+                    flexShrink: 0
+                  }}>
+                    <FileText size={18} />
+                  </div>
+                  <div>
+                    <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 800, color: 'var(--text-main)' }}>
+                      Bill / Bikri Parchi
+                    </h3>
+                    <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                      Bill No: BP-{String(billItems[0]?.id || Date.now()).slice(-6)} • {billItems.length} {billItems.length === 1 ? 'Item' : 'Items'}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bill-header-right" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => handleDownloadBillPDF(billItems)}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      padding: '6px 12px',
+                      fontSize: '0.78rem',
+                      fontWeight: 800,
+                      background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: '7px',
+                      cursor: 'pointer',
+                      boxShadow: '0 2px 8px rgba(16, 185, 129, 0.3)'
+                    }}
+                    title="Download Bill as PDF file"
+                  >
+                    <Download size={14} />
+                    <span className="hide-on-mobile">Download </span><span>PDF</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-outline"
+                    onClick={() => handlePrintSelectedBill(billItems)}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      padding: '6px 11px',
+                      fontSize: '0.78rem',
+                      fontWeight: 700
+                    }}
+                    title="Print Bill / Save as PDF"
+                  >
+                    <Printer size={14} />
+                    <span>Print</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className="btn-icon"
+                    onClick={() => {
+                      setSelectedItemsForBill(null);
+                      setSelectedItemForBill(null);
+                    }}
+                    style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: '4px' }}
+                  >
+                    <X size={20} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Bill Body (Scrollable) */}
+              <div className="mandi-modal-body bill-modal-body" style={{ padding: '16px 20px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                
+                {/* Printable / Realistic Bill Parchi Card */}
+                <div className="bill-parchi-card" style={{
+                  background: 'var(--bg-card)',
+                  border: '1.5px dashed var(--border-subtle)',
+                  borderRadius: '12px',
+                  padding: '16px 18px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '12px'
+                }}>
+                  {/* Shop Header */}
+                  <div className="bill-shop-header" style={{ textAlign: 'center', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '10px' }}>
+                    <div style={{ fontWeight: 900, fontSize: '1.15rem', color: 'var(--text-main)', letterSpacing: '0.04em' }}>
+                      AZIZ INTERNATIONAL
+                    </div>
+                    <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                      Azadpur Mandi, Delhi • Fruits & Dry Fruits Commission Agent
+                    </div>
+                    <div style={{
+                      display: 'inline-block',
+                      background: 'var(--bg-main)',
+                      border: '1px solid var(--border-subtle)',
+                      padding: '2px 10px',
+                      borderRadius: '12px',
+                      fontSize: '0.68rem',
+                      fontWeight: 800,
+                      color: 'var(--text-secondary)',
+                      marginTop: '6px'
+                    }}>
+                      BIKRI PARCHI / SALE INVOICE
+                    </div>
+                  </div>
+
+                  {/* Customer & Bill Meta */}
+                  <div className="bill-meta-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', fontSize: '0.8rem' }}>
+                    <div>
+                      <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: 700 }}>
+                        Customer Name
+                      </div>
+                      <div style={{ fontWeight: 800, color: 'var(--text-main)', marginTop: '1px' }}>
+                        {selectedCustomerForView?.customer_name}
+                      </div>
+                      {selectedCustomerForView?.phone && (
+                        <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '1px' }}>
+                          📞 {selectedCustomerForView.phone}
+                        </div>
+                      )}
+                    </div>
+
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: 700 }}>
+                        Bill Date
+                      </div>
+                      <div style={{ fontWeight: 800, color: 'var(--text-main)', marginTop: '1px', fontFamily: 'monospace' }}>
+                        📅 {formatDisplayDate(selectedBuyDateDetails?.date || billItems[0]?.date || billItems[0]?.selling_date)}
+                      </div>
+                      <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '1px' }}>
+                        Bill No: <strong style={{ color: '#2563eb', fontFamily: 'monospace' }}>BP-{String(billItems[0]?.id || Date.now()).slice(-6)}</strong>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Produce Table - Fixed 100% Width (Non-Scrollable) */}
+                  <div
+                    className="bill-produce-table-container"
+                    style={{
+                      background: 'var(--bg-main)',
+                      border: '1px solid var(--border-subtle)',
+                      borderRadius: '10px',
+                      padding: '8px 10px',
+                      width: '100%',
+                      boxSizing: 'border-box',
+                      overflow: 'hidden'
+                    }}
+                  >
+                    <table
+                      className="bill-produce-table"
+                      style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse', fontSize: '0.8rem' }}
+                    >
+                      <thead>
+                        <tr style={{ borderBottom: '1.5px solid var(--border-subtle)', color: 'var(--text-secondary)' }}>
+                          <th className="col-buy-date" style={{ padding: '8px 6px', textAlign: 'left', width: '22%' }}>Buy Date</th>
+                          <th className="col-fruit-name" style={{ padding: '8px 6px', textAlign: 'left', width: '30%' }}>Fruit Name</th>
+                          <th className="col-box-rate" style={{ padding: '8px 6px', textAlign: 'center', width: '28%' }}>Total Box × Rate</th>
+                          <th className="col-total" style={{ padding: '8px 6px', textAlign: 'right', width: '20%' }}>Total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {billItems.map((item, idx) => {
+                          const itemDate = formatDisplayDate(item.date || item.selling_date || selectedBuyDateDetails?.date || getSystemDate());
+                          return (
+                            <tr key={item.id || idx} style={{ borderBottom: '1px dashed var(--border-subtle)' }}>
+                              {/* 1. Buy Date */}
+                              <td className="col-buy-date" style={{
+                                padding: '8px 6px',
+                                fontFamily: 'monospace',
+                                fontWeight: 700,
+                                color: 'var(--text-secondary)',
+                                fontSize: '0.76rem',
+                                whiteSpace: 'nowrap'
+                              }}>
+                                {itemDate}
+                              </td>
+
+                              {/* 2. Fruit Name (No Truck Number) */}
+                              <td className="col-fruit-name" style={{
+                                padding: '8px 6px',
+                                fontWeight: 800,
+                                color: 'var(--text-main)',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap'
+                              }}>
+                                <span title={item.product_name} style={{ fontWeight: 800 }}>{item.product_name}</span>
+                              </td>
+
+                              {/* 3. Total Box * Per Box Price */}
+                              <td className="col-box-rate" style={{
+                                padding: '8px 6px',
+                                textAlign: 'center',
+                                whiteSpace: 'nowrap'
+                              }}>
+                                <span className="box-rate-pill" style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  background: 'var(--bg-surface)',
+                                  padding: '3px 7px',
+                                  borderRadius: '6px',
+                                  border: '1px solid var(--border-subtle)',
+                                  fontSize: '0.76rem'
+                                }}>
+                                  <strong style={{ color: '#10b981' }}>{item.boxes} BX</strong>
+                                  <span style={{ color: 'var(--text-secondary)' }}>×</span>
+                                  <strong style={{ color: 'var(--text-main)' }}>₹{Number(item.rate_per_box).toLocaleString()}</strong>
+                                </span>
+                              </td>
+
+                              {/* 4. Total */}
+                              <td className="col-total" style={{
+                                padding: '8px 6px',
+                                textAlign: 'right',
+                                whiteSpace: 'nowrap'
+                              }}>
+                                <div style={{ fontWeight: 900, color: 'var(--text-main)', fontSize: '0.88rem' }}>
+                                  ₹{Number(item.total).toLocaleString()}
+                                </div>
+                                {item.payment_mode && (
+                                  <span
+                                    className={`badge ${item.payment_mode === 'CREDIT' ? 'badge-warning' : 'badge-success'}`}
+                                    style={{ fontSize: '0.62rem', padding: '1px 5px', fontWeight: 800, marginTop: '2px', display: 'inline-block' }}
+                                  >
+                                    {item.payment_mode}
+                                  </span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                      {billItems.length > 1 && (
+                        <tfoot>
+                          <tr style={{ borderTop: '2px solid var(--border-subtle)' }}>
+                            <td colSpan="2" className="col-buy-date" style={{ padding: '8px 6px', fontWeight: 800, color: 'var(--text-main)' }}>
+                              Total
+                            </td>
+                            <td colSpan="2" className="col-total" style={{ padding: '8px 6px', textAlign: 'right', fontWeight: 900, fontSize: '0.95rem', color: '#10b981' }}>
+                              ₹{totalBillAmount.toLocaleString()}
+                            </td>
+                          </tr>
+                        </tfoot>
+                      )}
+                    </table>
+                  </div>
+                </div>
+
+              </div>
+
+              {/* Bill Footer */}
+              <div className="mandi-modal-footer" style={{
+                padding: '12px 20px',
+                display: 'flex',
+                justifyContent: 'flex-end',
+                alignItems: 'center',
+                borderTop: '1px solid var(--border-subtle)',
+                background: 'var(--bg-surface)'
+              }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => {
+                    setSelectedItemsForBill(null);
+                    setSelectedItemForBill(null);
+                  }}
+                >
+                  Close Bill
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ----------------------------------------------------------------- */}
       {/* 6. Add New Customer Sub-Modal */}
@@ -6492,49 +7809,7 @@ Branch: ${supp.branch_name || 'N/A'}`;
 
         // Helper to fetch all customer fruit sales for this supplier & specific truck
         const getTruckSales = (truckNum) => {
-          const tNumUpper = (truckNum || '').trim().toUpperCase();
-          const list = [];
-          const seen = new Set();
-
-          // Check truckSalesList state
-          (truckSalesList || []).forEach(ts => {
-            const tsSupp = (ts.supplier_name || '').trim().toLowerCase();
-            const tsTruck = (ts.truck_no || '').trim().toUpperCase();
-            if (tsSupp === suppLower && tsTruck === tNumUpper) {
-              if (!seen.has(ts.id)) {
-                seen.add(ts.id);
-                list.push(ts);
-              }
-            }
-          });
-
-          // Check customerProfiles.buy_history
-          (customerProfiles || []).forEach(cust => {
-            (cust.buy_history || []).forEach(buy => {
-              const buySupp = (buy.supplier_name || '').trim().toLowerCase();
-              const buyTruck = (buy.truck_no || '').trim().toUpperCase();
-              if (buySupp === suppLower && buyTruck === tNumUpper) {
-                if (!seen.has(buy.id)) {
-                  seen.add(buy.id);
-                  list.push({
-                    id: buy.id,
-                    selling_date: buy.date || buy.selling_date || getSystemDate(),
-                    customer_name: cust.customer_name || 'Customer',
-                    customer_phone: cust.phone || '',
-                    truck_no: tNumUpper,
-                    supplier_name: activeSupp?.supplier_name,
-                    product_name: buy.product_name || 'Fresh Fruit',
-                    boxes: Number(buy.boxes || 0),
-                    rate_per_box: Number(buy.rate_per_box || 0),
-                    total: Number(buy.total || 0),
-                    payment_mode: buy.payment_mode || 'CREDIT'
-                  });
-                }
-              }
-            });
-          });
-
-          return list.sort((a, b) => new Date(b.selling_date || 0) - new Date(a.selling_date || 0));
+          return getTruckSalesForSupplier(activeSupp, truckNum);
         };
 
         // All distinct truck numbers (both from inward and sales)
@@ -6562,147 +7837,177 @@ Branch: ${supp.branch_name || 'N/A'}`;
         return (
           <div className="mandi-modal-backdrop" onClick={() => setIsSupplierTrucksModalOpen(false)}>
             <div
-              className="mandi-modal-dialog"
+              className="mandi-modal-dialog supplier-modal-dialog"
               style={{ width: '100%', maxWidth: '1100px', height: '88vh' }}
               onClick={(e) => e.stopPropagation()}
             >
-              {/* Modal Header */}
-              <div className="mandi-modal-header">
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                  <div style={{
-                    width: '38px',
-                    height: '38px',
-                    borderRadius: '10px',
-                    background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    color: '#fff'
-                  }}>
-                    <Truck size={20} />
-                  </div>
-                  <div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <h3 style={{ margin: 0, fontSize: '1.2rem', fontWeight: 800, color: 'var(--text-main)' }}>
-                        Supplier Profiles & Trucks Directory
-                      </h3>
-                      <span className="badge badge-success hide-on-mobile" style={{ fontSize: '0.68rem', display: 'inline-flex', alignItems: 'center', gap: '3px', background: 'rgba(16, 185, 129, 0.12)', color: '#10b981', border: '1px solid rgba(16, 185, 129, 0.3)' }}>
-                        <ShieldCheck size={11} /> Authenticated • MySQL Live
-                      </span>
+              {/* Modal Header / Nav Bar */}
+              <div className="mandi-modal-header supplier-modal-header">
+                {/* 1. Header Top Row: Title, Icon & Close Button */}
+                <div className="supplier-header-top-row">
+                  <div className="supplier-header-title-col">
+                    <div className="supplier-header-icon">
+                      <Truck size={20} />
                     </div>
-                    <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
-                      Bank Passbooks & Inward Consignments Organized by Truck No.
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <h3 className="supplier-header-heading">
+                          Supplier Profiles & Trucks Directory
+                        </h3>
+                        <span className="badge badge-success hide-on-mobile" style={{ fontSize: '0.68rem', display: 'inline-flex', alignItems: 'center', gap: '3px', background: 'rgba(16, 185, 129, 0.12)', color: '#10b981', border: '1px solid rgba(16, 185, 129, 0.3)' }}>
+                          <ShieldCheck size={11} /> Authenticated • MySQL Live
+                        </span>
+                      </div>
+                      <div className="supplier-header-subtext">
+                        Bank Passbooks & Inward Consignments Organized by Truck No.
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                   <button
                     type="button"
-                    className="btn btn-sm"
+                    className="btn-icon supplier-close-btn"
+                    onClick={() => setIsSupplierTrucksModalOpen(false)}
+                    title="Close"
+                  >
+                    <X size={20} />
+                  </button>
+                </div>
+
+                {/* 2. Supplier Search Bar in Nav Bar */}
+                <div className="supplier-header-search-wrap">
+                  <input
+                    type="text"
+                    className="form-control supplier-header-search-input"
+                    placeholder="Search supplier, phone, bank, truck..."
+                    value={supplierTrucksSearch}
+                    onChange={(e) => setSupplierTrucksSearch(e.target.value)}
+                  />
+                  <Search size={15} color="#94a3b8" className="supplier-header-search-icon" />
+                  {supplierTrucksSearch && (
+                    <button
+                      type="button"
+                      onClick={() => setSupplierTrucksSearch('')}
+                      className="supplier-header-search-clear"
+                      title="Clear search"
+                    >
+                      <X size={14} />
+                    </button>
+                  )}
+                </div>
+
+                {/* 3. Action Buttons */}
+                <div className="supplier-header-actions">
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-clear-suppliers"
                     onClick={handleClearAllSuppliers}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '5px',
-                      fontSize: '0.8rem',
-                      background: 'rgba(239, 68, 68, 0.1)',
-                      color: '#ef4444',
-                      border: '1px solid rgba(239, 68, 68, 0.3)',
-                      borderRadius: '8px',
-                      padding: '6px 12px',
-                      fontWeight: 700,
-                      cursor: 'pointer'
-                    }}
                     title="Delete all supplier profiles"
                   >
-                    <Trash2 size={14} />
+                    <Trash2 size={13} />
                     <span>Clear All</span>
                   </button>
 
                   <button
                     type="button"
-                    className="btn btn-primary btn-sm"
+                    className="btn btn-primary btn-sm btn-new-supplier"
                     onClick={() => setIsAddSupplierModalOpen(true)}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '6px',
-                      fontSize: '0.8rem',
-                      background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)'
-                    }}
                   >
                     <Plus size={14} />
                     <span>+ New Supplier Profile</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    className="btn-icon"
-                    onClick={() => setIsSupplierTrucksModalOpen(false)}
-                    style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer' }}
-                  >
-                    <X size={20} />
                   </button>
                 </div>
               </div>
 
               {/* Modal Body */}
-              <div className="mandi-modal-body" style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                {/* Summary Metrics Row */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '12px' }}>
-                  <div className="khata-stat-card">
-                    <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: 700 }}>
-                      Total Suppliers
-                    </span>
-                    <span style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--text-main)' }}>
-                      {unifiedSuppliers.length}
-                    </span>
+              <div className="mandi-modal-body supplier-modal-body" style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                {/* Summary Metrics: Total Suppliers & Active Trucks (Card Format) */}
+                <div className="supplier-stats-cards-grid">
+                  {/* Card 1: Total Suppliers */}
+                  <div
+                    className={`supplier-stat-card ${supplierDirectoryFilter === 'ALL' ? 'active-all-card' : ''}`}
+                    onClick={() => setSupplierDirectoryFilter('ALL')}
+                    role="button"
+                    tabIndex={0}
+                    title="Click to view all supplier profiles"
+                  >
+                    <div className="supplier-stat-icon-wrap" style={{ background: 'rgba(59, 130, 246, 0.12)', color: '#3b82f6' }}>
+                      <Users size={20} />
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div className="supplier-stat-label">
+                        Total Suppliers
+                      </div>
+                      <div className="supplier-stat-value" style={{ color: 'var(--text-main)' }}>
+                        {unifiedSuppliers.length}
+                      </div>
+                      <div className="supplier-stat-subtext" style={{ color: supplierDirectoryFilter === 'ALL' ? '#3b82f6' : 'var(--text-secondary)' }}>
+                        {supplierDirectoryFilter === 'ALL' ? '● All Profiles' : 'Click to show all'}
+                      </div>
+                    </div>
                   </div>
 
-                  <div className="khata-stat-card" style={{ borderLeft: '3px solid #10b981' }}>
-                    <span style={{ fontSize: '0.72rem', color: '#10b981', textTransform: 'uppercase', fontWeight: 700 }}>
-                      Active Trucks
-                    </span>
-                    <span style={{ fontSize: '1.25rem', fontWeight: 900, color: '#10b981' }}>
-                      {Array.from(new Set([
-                        ...unifiedSuppliers.map(s => s.truckno).filter(Boolean),
-                        ...purchasesList.map(p => p.truck_number).filter(Boolean)
-                      ])).length} Trucks
-                    </span>
-                  </div>
-
-                  <div className="khata-stat-card" style={{ borderLeft: '3px solid #f59e0b' }}>
-                    <span style={{ fontSize: '0.72rem', color: '#f59e0b', textTransform: 'uppercase', fontWeight: 700 }}>
-                      Total Balance Boxes
-                    </span>
-                    <span style={{ fontSize: '1.25rem', fontWeight: 800, color: '#f59e0b' }}>
-                      {totalBalanceBoxes.toLocaleString()} BX
-                    </span>
+                  {/* Card 2: Active Trucks */}
+                  <div
+                    className={`supplier-stat-card ${supplierDirectoryFilter === 'ACTIVE_TRUCKS' ? 'active-stat-card' : ''}`}
+                    onClick={() => setSupplierDirectoryFilter(prev => prev === 'ACTIVE_TRUCKS' ? 'ALL' : 'ACTIVE_TRUCKS')}
+                    role="button"
+                    tabIndex={0}
+                    title="Click to show active truck profiles"
+                  >
+                    <div className="supplier-stat-icon-wrap" style={{ background: 'rgba(16, 185, 129, 0.15)', color: '#10b981' }}>
+                      <Truck size={20} />
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div className="supplier-stat-label" style={{ color: '#10b981' }}>
+                        Active Trucks
+                      </div>
+                      <div className="supplier-stat-value" style={{ color: '#10b981' }}>
+                        {activeTrucksCount} Trucks
+                      </div>
+                      <div className="supplier-stat-subtext" style={{ color: supplierDirectoryFilter === 'ACTIVE_TRUCKS' ? '#10b981' : 'var(--text-secondary)' }}>
+                        {supplierDirectoryFilter === 'ACTIVE_TRUCKS' ? '● Active Profiles Filtered' : 'Click to show active'}
+                      </div>
+                    </div>
                   </div>
                 </div>
 
-                {/* Supplier Directory Search Bar */}
-                <div style={{ position: 'relative' }}>
-                  <input
-                    type="text"
-                    className="form-control"
-                    placeholder="Search supplier by name, phone, bank, or truck..."
-                    style={{ paddingLeft: '34px', fontSize: '0.88rem', height: '42px' }}
-                    value={supplierTrucksSearch}
-                    onChange={(e) => setSupplierTrucksSearch(e.target.value)}
-                  />
-                  <Search size={16} color="#94a3b8" style={{ position: 'absolute', left: '11px', top: '50%', transform: 'translateY(-50%)' }} />
-                  {supplierTrucksSearch && (
+                {/* Active Filter Notice Bar */}
+                {supplierDirectoryFilter === 'ACTIVE_TRUCKS' && (
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '8px 12px',
+                    background: 'rgba(16, 185, 129, 0.08)',
+                    border: '1px solid rgba(16, 185, 129, 0.25)',
+                    borderRadius: '8px',
+                    fontSize: '0.78rem',
+                    color: '#10b981',
+                    fontWeight: 700
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <Filter size={13} />
+                      <span>Showing Active Profiles Only ({filteredUnifiedSuppliers.length} found)</span>
+                    </div>
                     <button
                       type="button"
-                      onClick={() => setSupplierTrucksSearch('')}
-                      style={{ position: 'absolute', right: '11px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: '2px' }}
+                      onClick={() => setSupplierDirectoryFilter('ALL')}
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        color: 'var(--text-secondary)',
+                        cursor: 'pointer',
+                        fontSize: '0.74rem',
+                        textDecoration: 'underline',
+                        fontWeight: 600,
+                        padding: 0
+                      }}
                     >
-                      <X size={15} />
+                      Show All Profiles
                     </button>
-                  )}
-                </div>
+                  </div>
+                )}
 
                 {/* Supplier Directory Grid (Responsive for Mobile, Tablet & Desktop) */}
                 <div className="supplier-directory-grid" style={{ flex: '1 1 auto', minHeight: 0 }}>
@@ -6728,7 +8033,7 @@ Branch: ${supp.branch_name || 'N/A'}`;
                             setIsSupplierDetailPopupOpen(true);
                           }}
                         >
-                          {/* Card Header: Avatar + Supplier Name + Truck Badge & Delete Button */}
+                          {/* Card Header: Avatar + Supplier Name + Truck Badge & Actions */}
                           <div style={{
                             display: 'flex',
                             alignItems: 'center',
@@ -6741,22 +8046,22 @@ Branch: ${supp.branch_name || 'N/A'}`;
                             <div style={{
                               display: 'flex',
                               alignItems: 'center',
-                              gap: '10px',
+                              gap: '8px',
                               minWidth: 0,
                               flex: '1 1 auto',
                               overflow: 'hidden'
                             }}>
                               <div style={{
-                                width: '38px',
-                                height: '38px',
-                                borderRadius: '10px',
+                                width: '34px',
+                                height: '34px',
+                                borderRadius: '8px',
                                 background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
                                 color: '#fff',
                                 display: 'flex',
                                 alignItems: 'center',
                                 justifyContent: 'center',
                                 fontWeight: 800,
-                                fontSize: '0.95rem',
+                                fontSize: '0.9rem',
                                 flexShrink: 0
                               }}>
                                 {(s.supplier_name || s.name || 'S')[0]?.toUpperCase()}
@@ -6764,7 +8069,7 @@ Branch: ${supp.branch_name || 'N/A'}`;
                               <div style={{ minWidth: 0, flex: 1, overflow: 'hidden' }}>
                                 <div style={{
                                   fontWeight: 800,
-                                  fontSize: '0.92rem',
+                                  fontSize: '0.88rem',
                                   color: 'var(--text-main)',
                                   whiteSpace: 'nowrap',
                                   overflow: 'hidden',
@@ -6773,19 +8078,16 @@ Branch: ${supp.branch_name || 'N/A'}`;
                                   {s.supplier_name || s.name}
                                 </div>
                                 <div style={{
-                                  fontSize: '0.72rem',
+                                  fontSize: '0.7rem',
                                   color: 'var(--text-secondary)',
                                   display: 'flex',
                                   alignItems: 'center',
-                                  gap: '6px',
-                                  marginTop: '2px',
+                                  marginTop: '1px',
                                   whiteSpace: 'nowrap',
                                   overflow: 'hidden',
                                   textOverflow: 'ellipsis'
                                 }}>
-                                  <span>📞 {s.phone || 'No phone'}</span>
-                                  <span>•</span>
-                                  <span>📍 {s.city || 'Azadpur Mandi'}</span>
+                                  <span>📞 {s.phone || 'No phone registered'}</span>
                                 </div>
                               </div>
                             </div>
@@ -6793,55 +8095,22 @@ Branch: ${supp.branch_name || 'N/A'}`;
                             <div style={{
                               display: 'flex',
                               alignItems: 'center',
-                              gap: '5px',
+                              gap: '4px',
                               flexShrink: 0
                             }}>
                               <span
                                 className="badge badge-success"
                                 style={{
-                                  fontSize: '0.68rem',
+                                  fontSize: '0.66rem',
                                   fontWeight: 800,
-                                  padding: '3px 8px',
-                                  borderRadius: '20px',
+                                  padding: '2px 7px',
+                                  borderRadius: '12px',
                                   whiteSpace: 'nowrap',
                                   flexShrink: 0
                                 }}
                               >
                                 {s.truckno || (sOrderCount > 0 ? `${sOrderCount} Orders` : 'Active')}
                               </span>
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleOpenEditPassbook(s);
-                                }}
-                                title={`Edit profile of ${s.supplier_name || s.name}`}
-                                style={{
-                                  background: 'rgba(59, 130, 246, 0.08)',
-                                  border: '1px solid rgba(59, 130, 246, 0.25)',
-                                  color: '#3b82f6',
-                                  borderRadius: '6px',
-                                  width: '26px',
-                                  height: '26px',
-                                  padding: 0,
-                                  cursor: 'pointer',
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  justifyContent: 'center',
-                                  flexShrink: 0,
-                                  transition: 'all 0.15s ease'
-                                }}
-                                onMouseEnter={(e) => {
-                                  e.currentTarget.style.background = 'rgba(59, 130, 246, 0.2)';
-                                  e.currentTarget.style.borderColor = '#3b82f6';
-                                }}
-                                onMouseLeave={(e) => {
-                                  e.currentTarget.style.background = 'rgba(59, 130, 246, 0.08)';
-                                  e.currentTarget.style.borderColor = 'rgba(59, 130, 246, 0.25)';
-                                }}
-                              >
-                                <Edit size={13} />
-                              </button>
                               <button
                                 type="button"
                                 onClick={(e) => {
@@ -6854,8 +8123,8 @@ Branch: ${supp.branch_name || 'N/A'}`;
                                   border: '1px solid rgba(239, 68, 68, 0.25)',
                                   color: '#ef4444',
                                   borderRadius: '6px',
-                                  width: '26px',
-                                  height: '26px',
+                                  width: '24px',
+                                  height: '24px',
                                   padding: 0,
                                   cursor: 'pointer',
                                   display: 'inline-flex',
@@ -6873,36 +8142,8 @@ Branch: ${supp.branch_name || 'N/A'}`;
                                   e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.25)';
                                 }}
                               >
-                                <Trash2 size={13} />
+                                <Trash2 size={12} />
                               </button>
-                            </div>
-                          </div>
-
-                          {/* Passbook & Stock Snapshot */}
-                          <div style={{
-                            display: 'grid',
-                            gridTemplateColumns: '1fr 1fr',
-                            gap: '10px',
-                            background: 'var(--bg-main)',
-                            padding: '10px 12px',
-                            borderRadius: '10px',
-                            border: '1px solid var(--border-subtle)'
-                          }}>
-                            <div style={{ minWidth: 0 }}>
-                              <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.03em' }}>
-                                Bank Passbook
-                              </div>
-                              <div style={{ fontSize: '0.86rem', fontWeight: 700, color: 'var(--text-main)', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                🏛️ {s.bank_name || 'Passbook Saved'}
-                              </div>
-                            </div>
-                            <div style={{ minWidth: 0, textAlign: 'right' }}>
-                              <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.03em' }}>
-                                Balance Inventory
-                              </div>
-                              <div style={{ fontSize: '0.88rem', fontWeight: 800, color: '#10b981', marginTop: '2px' }}>
-                                📦 {s.balance_box !== undefined ? `${s.balance_box} BX` : '0 BX'}
-                              </div>
                             </div>
                           </div>
 
@@ -6911,16 +8152,20 @@ Branch: ${supp.branch_name || 'N/A'}`;
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: 'space-between',
-                            paddingTop: '8px',
+                            paddingTop: '6px',
                             borderTop: '1px solid var(--border-subtle)',
-                            fontSize: '0.78rem',
+                            fontSize: '0.74rem',
                             color: '#10b981',
-                            fontWeight: 700
+                            fontWeight: 700,
+                            gap: '6px',
+                            width: '100%',
+                            minWidth: 0,
+                            boxSizing: 'border-box'
                           }}>
-                            <span style={{ color: 'var(--text-secondary)', fontSize: '0.74rem' }}>
+                            <span style={{ color: 'var(--text-secondary)', fontSize: '0.72rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                               A/C: {s.account_number ? `•••${s.account_number.slice(-4)}` : 'Passbook registered'}
                             </span>
-                            <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            <span style={{ display: 'flex', alignItems: 'center', gap: '3px', whiteSpace: 'nowrap', flexShrink: 0, fontSize: '0.72rem' }}>
                               View Passbook & Trucks →
                             </span>
                           </div>
@@ -7087,185 +8332,131 @@ Branch: ${supp.branch_name || 'N/A'}`;
               className="mandi-modal-dialog centered-detail-popup"
               onClick={(e) => e.stopPropagation()}
             >
-              {/* Header with Back button and Actions */}
-              <div className="mandi-modal-header" style={{ borderBottom: '1px solid var(--border-subtle)', padding: '14px 18px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                  <button
-                    type="button"
-                    className="btn btn-outline"
-                    onClick={() => setIsSupplierDetailPopupOpen(false)}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '4px',
-                      padding: '6px 12px',
-                      fontSize: '0.82rem',
-                      fontWeight: 600,
-                      borderRadius: '8px'
-                    }}
-                  >
-                    <ChevronLeft size={16} />
-                    <span>Back</span>
-                  </button>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <Truck size={20} color="#10b981" />
-                    <div>
-                      <h3 style={{ margin: 0, fontSize: '1.08rem', fontWeight: 800 }}>
-                        {activeSupp.supplier_name || 'Supplier Profile'}
-                      </h3>
-                      <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)' }}>
-                        Detailed Bank Passbook & Truck-wise Customer Sales
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <button
-                    type="button"
-                    className="btn btn-primary"
-                    style={{
-                      padding: '6px 14px',
-                      fontSize: '0.82rem',
-                      fontWeight: 700,
-                      background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-                      borderColor: '#10b981',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '6px',
-                      boxShadow: '0 2px 6px rgba(16, 185, 129, 0.25)'
-                    }}
-                    onClick={() => handleOpenEditPassbook(activeSupp)}
-                    title="Edit Supplier Name, Phone, City & Bank Passbook"
-                  >
-                    <Edit size={14} />
-                    <span>Edit Profile & Passbook</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    className="btn btn-sm"
-                    style={{
-                      padding: '6px 12px',
-                      fontSize: '0.82rem',
-                      background: 'rgba(239, 68, 68, 0.1)',
-                      color: '#ef4444',
-                      border: '1px solid rgba(239, 68, 68, 0.25)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '5px',
-                      borderRadius: '8px',
-                      cursor: 'pointer'
-                    }}
-                    onClick={() => handleDeleteSingleSupplier(activeSupp)}
-                    title={`Delete ${activeSupp.supplier_name || 'supplier'} profile`}
-                  >
-                    <Trash2 size={14} />
-                    <span>Delete</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    className="btn-icon"
-                    onClick={() => setIsSupplierDetailPopupOpen(false)}
-                    style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer' }}
-                  >
-                    <X size={20} />
-                  </button>
-                </div>
-              </div>
-
               {/* Scrollable Body */}
-              <div className="mandi-modal-body" style={{ padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: '18px', overflowY: 'auto' }}>
+              <div className="mandi-modal-body" style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: '14px', overflowY: 'auto' }}>
                 {/* Supplier Hero Information */}
-                <div style={{
+                <div className="supplier-hero-card" style={{
                   display: 'flex',
                   alignItems: 'center',
-                  justifyContent: 'space-between',
-                  flexWrap: 'wrap',
-                  gap: '14px',
+                  gap: '12px',
                   background: 'var(--bg-main)',
-                  padding: '16px',
+                  padding: '10px 14px',
                   borderRadius: '12px',
                   border: '1px solid var(--border-subtle)'
                 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-                    <div style={{
-                      width: '52px',
-                      height: '52px',
-                      borderRadius: '14px',
-                      background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-                      color: '#fff',
-                      display: 'flex',
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm supplier-popup-back-btn"
+                    onClick={() => setIsSupplierDetailPopupOpen(false)}
+                    style={{
+                      display: 'inline-flex',
                       alignItems: 'center',
                       justifyContent: 'center',
-                      fontSize: '1.4rem',
-                      fontWeight: 900,
-                      boxShadow: '0 4px 12px rgba(16, 185, 129, 0.25)'
-                    }}>
-                      {(activeSupp.supplier_name || 'S').charAt(0).toUpperCase()}
+                      width: '32px',
+                      height: '32px',
+                      padding: 0,
+                      borderRadius: '8px',
+                      flexShrink: 0
+                    }}
+                    title="Back"
+                  >
+                    <ChevronLeft size={18} />
+                  </button>
+
+                  <div style={{
+                    width: '38px',
+                    height: '38px',
+                    borderRadius: '10px',
+                    background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                    color: '#fff',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: '1.1rem',
+                    fontWeight: 900,
+                    boxShadow: '0 4px 12px rgba(16, 185, 129, 0.25)',
+                    flexShrink: 0
+                  }}>
+                    {(activeSupp.supplier_name || 'S').charAt(0).toUpperCase()}
+                  </div>
+
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <div style={{ fontSize: '1.05rem', fontWeight: 800, color: 'var(--text-main)', lineHeight: 1.2 }}>
+                        {activeSupp.supplier_name}
+                      </div>
+                      <button
+                        type="button"
+                        className="supplier-profile-edit-btn"
+                        onClick={() => handleOpenEditPassbook(activeSupp)}
+                        title="Edit Supplier Profile"
+                        style={{
+                          background: 'rgba(16, 185, 129, 0.1)',
+                          border: '1px solid rgba(16, 185, 129, 0.25)',
+                          color: '#10b981',
+                          borderRadius: '5px',
+                          width: '20px',
+                          height: '20px',
+                          minWidth: '20px',
+                          maxWidth: '20px',
+                          minHeight: '20px',
+                          maxHeight: '20px',
+                          padding: 0,
+                          cursor: 'pointer',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          flexShrink: 0,
+                          alignSelf: 'center',
+                          lineHeight: 1,
+                          boxSizing: 'border-box'
+                        }}
+                      >
+                        <Edit2 size={11} />
+                      </button>
                     </div>
-                    <div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <div style={{ fontSize: '1.2rem', fontWeight: 800, color: 'var(--text-main)' }}>
-                          {activeSupp.supplier_name}
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => handleOpenEditPassbook(activeSupp)}
-                          title="Edit Supplier Profile"
-                          style={{
-                            background: 'rgba(16, 185, 129, 0.1)',
-                            border: '1px solid rgba(16, 185, 129, 0.25)',
-                            color: '#10b981',
-                            borderRadius: '6px',
-                            padding: '3px 8px',
-                            cursor: 'pointer',
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '4px',
-                            fontSize: '0.72rem',
-                            fontWeight: 700
-                          }}
-                        >
-                          <Edit2 size={12} />
-                          <span>Edit</span>
-                        </button>
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', marginTop: '4px', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-                        {activeSupp.phone && (
-                          <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                            <Phone size={13} color="#10b981" />
-                            {activeSupp.phone}
-                          </span>
-                        )}
-                        {activeSupp.city && (
-                          <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                            <MapPin size={13} color="#6366f1" />
-                            {activeSupp.city}
-                          </span>
-                        )}
-                        <span className="badge badge-success" style={{ fontSize: '0.72rem' }}>
-                          Verified Supplier
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginTop: '2px', fontSize: '0.74rem', color: 'var(--text-secondary)' }}>
+                      {activeSupp.phone && (
+                        <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <Phone size={11} color="#10b981" />
+                          {activeSupp.phone}
                         </span>
-                      </div>
+                      )}
+                      <span className="badge badge-success" style={{ fontSize: '0.66rem', padding: '1px 6px' }}>
+                        Verified Supplier
+                      </span>
                     </div>
                   </div>
 
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                    <div style={{ textAlign: 'right' }}>
-                      <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: 700 }}>
-                        Balance Stock In Mandi
-                      </div>
-                      <div style={{ fontSize: '1.35rem', fontWeight: 900, color: '#10b981' }}>
-                        {activeSupp.balance_box !== undefined ? `${activeSupp.balance_box} Boxes` : '0 Boxes'}
-                      </div>
-                    </div>
-                  </div>
+                  {/* Toggle Arrow for Bank Passbook Section */}
+                  <button
+                    type="button"
+                    onClick={() => setIsPassbookSectionOpen(prev => !prev)}
+                    title={isPassbookSectionOpen ? 'Hide Bank Passbook' : 'Show Bank Passbook'}
+                    style={{
+                      background: isPassbookSectionOpen ? 'rgba(16, 185, 129, 0.15)' : 'rgba(16, 185, 129, 0.08)',
+                      border: '1px solid rgba(16, 185, 129, 0.25)',
+                      color: '#10b981',
+                      borderRadius: '8px',
+                      width: '30px',
+                      height: '30px',
+                      padding: 0,
+                      cursor: 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      flexShrink: 0,
+                      transition: 'all 0.2s ease'
+                    }}
+                  >
+                    {isPassbookSectionOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                  </button>
                 </div>
 
-                {/* Bank Passbook Card */}
-                <div style={{
+                {/* Bank Passbook Card - Collapsible */}
+                {isPassbookSectionOpen && (
+                <div className="supplier-bank-card" style={{
                   background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.08) 0%, rgba(6, 95, 70, 0.05) 100%)',
                   border: '1px solid rgba(16, 185, 129, 0.25)',
                   borderRadius: '12px',
@@ -7283,7 +8474,7 @@ Branch: ${supp.branch_name || 'N/A'}`;
                     </div>
                     <button
                       type="button"
-                      className="btn btn-secondary btn-sm"
+                      className="btn btn-secondary btn-sm supplier-bank-copy-btn"
                       onClick={() => handleCopyPassbook(activeSupp)}
                       style={{ gap: '6px' }}
                     >
@@ -7292,28 +8483,24 @@ Branch: ${supp.branch_name || 'N/A'}`;
                     </button>
                   </div>
 
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '12px' }}>
+                  <div className="supplier-bank-grid" style={{ display: 'grid', gap: '12px' }}>
                     <div>
                       <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: 600 }}>Bank Name</span>
-                      <p style={{ margin: '2px 0 0', fontWeight: 700, fontSize: '0.9rem' }}>{activeSupp.bank_name || 'State Bank of India'}</p>
+                      <p style={{ margin: '2px 0 0', fontWeight: 700, fontSize: '0.9rem' }}>{activeSupp.bank_name || '—'}</p>
                     </div>
                     <div>
                       <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: 600 }}>Account Number</span>
                       <p style={{ margin: '2px 0 0', fontWeight: 700, fontSize: '0.9rem', letterSpacing: '0.5px', color: '#10b981', fontFamily: 'monospace' }}>
-                        {activeSupp.account_number || '389201004523'}
+                        {activeSupp.account_number || '—'}
                       </p>
                     </div>
                     <div>
                       <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: 600 }}>IFSC Code</span>
-                      <p style={{ margin: '2px 0 0', fontWeight: 700, fontSize: '0.9rem', fontFamily: 'monospace' }}>{activeSupp.ifsc_code || 'SBIN0001234'}</p>
+                      <p style={{ margin: '2px 0 0', fontWeight: 700, fontSize: '0.9rem', fontFamily: 'monospace' }}>{activeSupp.ifsc_code || '—'}</p>
                     </div>
-                    <div>
-                      <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: 600 }}>A/C Holder Name</span>
-                      <p style={{ margin: '2px 0 0', fontWeight: 700, fontSize: '0.9rem' }}>{activeSupp.account_holder_name || activeSupp.supplier_name || '—'}</p>
-                    </div>
-                    <div>
+                    <div className="supplier-bank-grid-full">
                       <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: 600 }}>Branch Name</span>
-                      <p style={{ margin: '2px 0 0', fontWeight: 700, fontSize: '0.9rem' }}>{activeSupp.branch_name || 'Azadpur Mandi Branch, Delhi'}</p>
+                      <p style={{ margin: '2px 0 0', fontWeight: 700, fontSize: '0.9rem' }}>{activeSupp.branch_name || '—'}</p>
                     </div>
                     {activeSupp.upi_id && (
                       <div>
@@ -7323,9 +8510,10 @@ Branch: ${supp.branch_name || 'N/A'}`;
                     )}
                   </div>
                 </div>
+                )}
 
                 {/* Truck-wise Consignments & Customer Fruit Sales */}
-                <div style={{ border: '1px solid var(--border-subtle)', borderRadius: '12px', padding: '16px', background: 'var(--bg-input)' }}>
+                <div className="supplier-trucks-card" style={{ border: '1px solid var(--border-subtle)', borderRadius: '12px', padding: '16px', background: 'var(--bg-input)' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px', marginBottom: '14px' }}>
                     <div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
@@ -7501,14 +8689,18 @@ Branch: ${supp.branch_name || 'N/A'}`;
                           'Fresh Produce';
 
                         // Settlement for tNum
-                        const curSettlement = truckSettlements[tNum] || { commissionPercent: 5, truckFare: 0, kuli: 0 };
+                        const curSettlement = truckSettlements[tNum] || { commissionPercent: 5, truckFare: 0, kuli: 0, cash: 0 };
                         const commPct = Number(curSettlement.commissionPercent !== undefined ? curSettlement.commissionPercent : 5);
                         const fareAmount = Number(curSettlement.truckFare || 0);
                         const kuliAmount = Number(curSettlement.kuli || 0);
+                        const cashAmount = Number(curSettlement.cash || 0);
                         const commAmount = Math.round((totalSoldValue * commPct) / 100);
-                        const totalDeductions = commAmount + fareAmount + kuliAmount;
+                        const totalDeductions = commAmount + fareAmount + kuliAmount + cashAmount;
                         const invoiceTotal = Math.max(0, totalSoldValue - totalDeductions);
                         const grossMargin = commAmount;
+                        const isSettled = (cashSaleSettlements || []).some(
+                          r => r.truck_no === tNum && (r.supplier_name || '').trim().toLowerCase() === (activeSupp?.supplier_name || '').trim().toLowerCase()
+                        );
 
                         return (
                           <div
@@ -7610,8 +8802,8 @@ Branch: ${supp.branch_name || 'N/A'}`;
                               </div>
 
                               {/* Right side: 4 Pill Boxes + Chevron */}
-                              <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
-                                <div style={{
+                              <div className="supplier-truck-pills-wrap" style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+                                <div className="supplier-truck-pill" style={{
                                   textAlign: 'center',
                                   padding: '5px 14px',
                                   background: 'var(--bg-main)',
@@ -7628,7 +8820,7 @@ Branch: ${supp.branch_name || 'N/A'}`;
                                   </strong>
                                 </div>
 
-                                <div style={{
+                                <div className="supplier-truck-pill" style={{
                                   textAlign: 'center',
                                   padding: '5px 14px',
                                   background: 'var(--bg-main)',
@@ -7645,7 +8837,7 @@ Branch: ${supp.branch_name || 'N/A'}`;
                                   </strong>
                                 </div>
 
-                                <div style={{
+                                <div className="supplier-truck-pill" style={{
                                   textAlign: 'center',
                                   padding: '5px 14px',
                                   background: 'var(--bg-main)',
@@ -7662,7 +8854,7 @@ Branch: ${supp.branch_name || 'N/A'}`;
                                   </strong>
                                 </div>
 
-                                <div style={{
+                                <div className="supplier-truck-pill" style={{
                                   textAlign: 'center',
                                   padding: '5px 14px',
                                   background: '#dcfce7',
@@ -7738,7 +8930,7 @@ Branch: ${supp.branch_name || 'N/A'}`;
                                             <tr key={sale.id}>
                                               <td>
                                                 <span style={{ color: 'var(--text-main)', fontWeight: 700 }}>
-                                                  {sale.selling_date}
+                                                  {formatDisplayDate(sale.selling_date)}
                                                 </span>
                                               </td>
                                               <td>
@@ -7790,23 +8982,36 @@ Branch: ${supp.branch_name || 'N/A'}`;
 
                                 {/* Real-time Gross Margin & Vyapari Invoice Settlement (For Complete Truck) */}
                                 {isComplete && (
-                                  <div style={{
-                                    margin: '0 16px 16px 16px',
-                                    padding: '18px 20px',
-                                    background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.05) 0%, rgba(16, 185, 129, 0.05) 100%)',
-                                    border: '1.5px solid rgba(59, 130, 246, 0.28)',
-                                    borderRadius: '12px',
-                                    display: 'flex',
-                                    flexDirection: 'column',
-                                    gap: '16px'
-                                  }}>
+                                  <div
+                                    className="truck-settlement-card"
+                                    style={{
+                                      margin: '0 16px 16px 16px',
+                                      padding: '18px 20px',
+                                      background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.05) 0%, rgba(16, 185, 129, 0.05) 100%)',
+                                      border: '1.5px solid rgba(59, 130, 246, 0.28)',
+                                      borderRadius: '12px',
+                                      display: 'flex',
+                                      flexDirection: 'column',
+                                      gap: '16px'
+                                    }}
+                                  >
                                     {/* Section Top Header & Actions */}
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+                                    <div
+                                      className="truck-settlement-header"
+                                      style={{
+                                        display: 'flex',
+                                        justifyContent: 'space-between',
+                                        alignItems: 'center',
+                                        flexWrap: 'wrap',
+                                        gap: '10px'
+                                      }}
+                                    >
                                       <div>
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                                           <div style={{
                                             width: '28px',
                                             height: '28px',
+                                            minWidth: '28px',
                                             borderRadius: '6px',
                                             background: 'rgba(59, 130, 246, 0.15)',
                                             color: '#2563eb',
@@ -7816,46 +9021,50 @@ Branch: ${supp.branch_name || 'N/A'}`;
                                           }}>
                                             <Calculator size={16} />
                                           </div>
-                                          <strong style={{ fontSize: '0.98rem', color: 'var(--text-main)', letterSpacing: '0.02em' }}>
-                                            Real-Time Gross Margin & Vyapari Invoice Settlement
+                                          <strong style={{ fontSize: '0.96rem', color: 'var(--text-main)', letterSpacing: '0.02em', lineHeight: '1.3' }}>
+                                             Vyapari Invoice Settlement
                                           </strong>
                                           <span className="badge" style={{ fontSize: '0.7rem', background: 'rgba(16, 185, 129, 0.15)', color: '#059669', fontWeight: 800 }}>
                                             Live Calculation
                                           </span>
                                         </div>
-                                        <div style={{ fontSize: '0.76rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                                        <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', marginTop: '3px', lineHeight: '1.4' }}>
                                           Total Sold me se Commission (%), Truck Fare aur Kuli minus hokar Net Invoice Total aur Gross Margin calculate hota hai.
                                         </div>
                                       </div>
 
                                       {/* Action Buttons */}
-                                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                      <div className="truck-settlement-actions" style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                                         <button
                                           type="button"
-                                          className="btn btn-sm btn-outline"
+                                          className="btn btn-sm truck-settlement-btn"
                                           onClick={() => handleSaveSettlementAndOpenSidebar(
                                             activeSupp, tNum, invoiceTotal,
-                                            totalSoldValue, commAmount, fareAmount, kuliAmount
+                                            totalSoldValue, commAmount, fareAmount, kuliAmount, cashAmount,
+                                            tProduce, totalSoldBoxes
                                           )}
                                           style={{
                                             fontSize: '0.78rem',
                                             fontWeight: 700,
                                             display: 'inline-flex',
                                             alignItems: 'center',
+                                            justifyContent: 'center',
                                             gap: '5px',
-                                            background: savedSettlementTruck === tNum ? '#10b981' : 'transparent',
-                                            color: savedSettlementTruck === tNum ? '#ffffff' : 'var(--text-main)',
-                                            borderColor: savedSettlementTruck === tNum ? '#10b981' : 'var(--border-subtle)',
-                                            transition: 'all 0.2s ease'
+                                            background: isSettled ? '#059669' : 'transparent',
+                                            color: isSettled ? '#ffffff' : 'var(--text-main)',
+                                            border: isSettled ? '1.5px solid #047857' : '1.5px solid var(--border-subtle)',
+                                            boxShadow: isSettled ? '0 2px 8px rgba(5, 150, 105, 0.28)' : 'none',
+                                            transition: 'all 0.2s ease',
+                                            cursor: 'pointer'
                                           }}
                                         >
                                           <Check size={14} />
-                                          <span>{savedSettlementTruck === tNum ? 'Settlement Saved! ✓' : 'Save Settlement'}</span>
+                                          <span>{isSettled ? 'Settlement Saved ✓' : 'Save Settlement'}</span>
                                         </button>
 
                                         <button
                                           type="button"
-                                          className="btn btn-sm btn-primary"
+                                          className="btn btn-sm btn-primary truck-settlement-btn"
                                           onClick={() => {
                                             handlePrintTruckInvoice(
                                               activeSupp,
@@ -7868,7 +9077,8 @@ Branch: ${supp.branch_name || 'N/A'}`;
                                               commAmount,
                                               fareAmount,
                                               kuliAmount,
-                                              invoiceTotal
+                                              invoiceTotal,
+                                              cashAmount
                                             );
                                           }}
                                           style={{
@@ -7876,6 +9086,7 @@ Branch: ${supp.branch_name || 'N/A'}`;
                                             fontWeight: 700,
                                             display: 'inline-flex',
                                             alignItems: 'center',
+                                            justifyContent: 'center',
                                             gap: '5px',
                                             background: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
                                             border: 'none',
@@ -7883,27 +9094,30 @@ Branch: ${supp.branch_name || 'N/A'}`;
                                           }}
                                         >
                                           <Printer size={14} />
-                                          <span>Print Vyapari Invoice Parchi</span>
+                                          <span>Print Parchi</span>
                                         </button>
                                       </div>
                                     </div>
 
                                     {/* Live Inputs Grid */}
-                                    <div style={{
-                                      display: 'grid',
-                                      gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
-                                      gap: '14px',
-                                      background: 'var(--bg-main)',
-                                      padding: '14px 16px',
-                                      borderRadius: '10px',
-                                      border: '1px solid var(--border-subtle)'
-                                    }}>
+                                    <div
+                                      className="truck-settlement-inputs"
+                                      style={{
+                                        display: 'grid',
+                                        gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+                                        gap: '12px',
+                                        background: 'var(--bg-main)',
+                                        padding: '12px 14px',
+                                        borderRadius: '10px',
+                                        border: '1px solid var(--border-subtle)'
+                                      }}
+                                    >
                                       {/* 1. Commission Input */}
-                                      <div>
-                                        <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 800, textTransform: 'uppercase', color: 'var(--text-secondary)', marginBottom: '5px' }}>
-                                          Commission Rate (%)
+                                      <div style={{ minWidth: 0, width: '100%' }}>
+                                        <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 800, textTransform: 'uppercase', color: 'var(--text-secondary)', marginBottom: '5px' }}>
+                                          Commission (%)
                                         </label>
-                                        <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                                        <div style={{ position: 'relative', display: 'flex', alignItems: 'center', width: '100%' }}>
                                           <input
                                             type="number"
                                             min="0"
@@ -7913,28 +9127,32 @@ Branch: ${supp.branch_name || 'N/A'}`;
                                             onChange={(e) => updateTruckSettlement(tNum, 'commissionPercent', e.target.value === '' ? '' : Number(e.target.value))}
                                             className="form-control"
                                             style={{
+                                              width: '100%',
+                                              maxWidth: '100%',
+                                              boxSizing: 'border-box',
                                               fontWeight: 800,
-                                              fontSize: '1rem',
-                                              paddingRight: '36px',
+                                              fontSize: '0.95rem',
+                                              paddingRight: '24px',
+                                              paddingLeft: '8px',
                                               background: 'var(--bg-surface)'
                                             }}
                                           />
-                                          <span style={{ position: 'absolute', right: '12px', fontWeight: 800, color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                                          <span style={{ position: 'absolute', right: '8px', fontWeight: 800, color: 'var(--text-secondary)', fontSize: '0.85rem', pointerEvents: 'none' }}>
                                             %
                                           </span>
                                         </div>
-                                        <div style={{ fontSize: '0.72rem', color: '#10b981', fontWeight: 700, marginTop: '4px' }}>
+                                        <div style={{ fontSize: '0.68rem', color: '#10b981', fontWeight: 700, marginTop: '4px', lineHeight: '1.2' }}>
                                           = ₹{commAmount.toLocaleString()} ({commPct}%)
                                         </div>
                                       </div>
 
                                       {/* 2. Truck Fare Input */}
-                                      <div>
-                                        <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 800, textTransform: 'uppercase', color: 'var(--text-secondary)', marginBottom: '5px' }}>
-                                          Truck Fare / Bhada (TF) (₹)
+                                      <div style={{ minWidth: 0, width: '100%' }}>
+                                        <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 800, textTransform: 'uppercase', color: 'var(--text-secondary)', marginBottom: '5px' }}>
+                                          Truck Fare (₹)
                                         </label>
-                                        <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-                                          <span style={{ position: 'absolute', left: '12px', fontWeight: 800, color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                                        <div style={{ position: 'relative', display: 'flex', alignItems: 'center', width: '100%' }}>
+                                          <span style={{ position: 'absolute', left: '8px', fontWeight: 800, color: 'var(--text-secondary)', fontSize: '0.85rem', pointerEvents: 'none' }}>
                                             ₹
                                           </span>
                                           <input
@@ -7946,25 +9164,29 @@ Branch: ${supp.branch_name || 'N/A'}`;
                                             onChange={(e) => updateTruckSettlement(tNum, 'truckFare', e.target.value === '' ? '' : Number(e.target.value))}
                                             className="form-control"
                                             style={{
+                                              width: '100%',
+                                              maxWidth: '100%',
+                                              boxSizing: 'border-box',
                                               fontWeight: 800,
-                                              fontSize: '1rem',
-                                              paddingLeft: '28px',
+                                              fontSize: '0.95rem',
+                                              paddingLeft: '22px',
+                                              paddingRight: '6px',
                                               background: 'var(--bg-surface)'
                                             }}
                                           />
                                         </div>
-                                        <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
-                                          Vyapari account se deduct hoga
+                                        <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', marginTop: '4px', lineHeight: '1.2' }}>
+                                          Vyapari se deduct
                                         </div>
                                       </div>
 
                                       {/* 3. Kuli / Hamali Input */}
-                                      <div>
-                                        <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 800, textTransform: 'uppercase', color: 'var(--text-secondary)', marginBottom: '5px' }}>
-                                          Kuli / Hamali Labor (₹)
+                                      <div style={{ minWidth: 0, width: '100%' }}>
+                                        <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 800, textTransform: 'uppercase', color: 'var(--text-secondary)', marginBottom: '5px' }}>
+                                          Kuli / Hamali (₹)
                                         </label>
-                                        <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-                                          <span style={{ position: 'absolute', left: '12px', fontWeight: 800, color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                                        <div style={{ position: 'relative', display: 'flex', alignItems: 'center', width: '100%' }}>
+                                          <span style={{ position: 'absolute', left: '8px', fontWeight: 800, color: 'var(--text-secondary)', fontSize: '0.85rem', pointerEvents: 'none' }}>
                                             ₹
                                           </span>
                                           <input
@@ -7976,119 +9198,81 @@ Branch: ${supp.branch_name || 'N/A'}`;
                                             onChange={(e) => updateTruckSettlement(tNum, 'kuli', e.target.value === '' ? '' : Number(e.target.value))}
                                             className="form-control"
                                             style={{
+                                              width: '100%',
+                                              maxWidth: '100%',
+                                              boxSizing: 'border-box',
                                               fontWeight: 800,
-                                              fontSize: '1rem',
-                                              paddingLeft: '28px',
+                                              fontSize: '0.95rem',
+                                              paddingLeft: '22px',
+                                              paddingRight: '6px',
                                               background: 'var(--bg-surface)'
                                             }}
                                           />
                                         </div>
-                                        <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
-                                          Unloading & mandi labor charge
+                                        <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', marginTop: '4px', lineHeight: '1.2' }}>
+                                          Mandi labor charge
                                         </div>
                                       </div>
-                                    </div>
 
-                                    {/* Real-time Calculation KPI Breakdown Cards */}
-                                    <div style={{
-                                      display: 'grid',
-                                      gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-                                      gap: '12px'
-                                    }}>
-                                      {/* Total Sold */}
-                                      <div style={{
-                                        background: 'var(--bg-surface)',
-                                        border: '1px solid var(--border-subtle)',
-                                        borderRadius: '10px',
-                                        padding: '12px 14px'
-                                      }}>
-                                        <span style={{ fontSize: '0.68rem', textTransform: 'uppercase', color: 'var(--text-secondary)', fontWeight: 800, display: 'block' }}>
-                                          Total Sold (Gross Bikri)
-                                        </span>
-                                        <div style={{ fontSize: '1.25rem', fontWeight: 900, color: 'var(--text-main)', marginTop: '2px' }}>
-                                          ₹{totalSoldValue.toLocaleString()}
+                                      {/* 4. Cash / Advance Input */}
+                                      <div style={{ minWidth: 0, width: '100%' }}>
+                                        <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 800, textTransform: 'uppercase', color: 'var(--text-secondary)', marginBottom: '5px' }}>
+                                          Cash / Advance (₹)
+                                        </label>
+                                        <div style={{ position: 'relative', display: 'flex', alignItems: 'center', width: '100%' }}>
+                                          <span style={{ position: 'absolute', left: '8px', fontWeight: 800, color: 'var(--text-secondary)', fontSize: '0.85rem', pointerEvents: 'none' }}>
+                                            ₹
+                                          </span>
+                                          <input
+                                            type="number"
+                                            min="0"
+                                            step="100"
+                                            placeholder="0"
+                                            value={curSettlement.cash !== undefined && curSettlement.cash !== null ? curSettlement.cash : ''}
+                                            onChange={(e) => updateTruckSettlement(tNum, 'cash', e.target.value === '' ? '' : Number(e.target.value))}
+                                            className="form-control"
+                                            style={{
+                                              width: '100%',
+                                              maxWidth: '100%',
+                                              boxSizing: 'border-box',
+                                              fontWeight: 800,
+                                              fontSize: '0.95rem',
+                                              paddingLeft: '22px',
+                                              paddingRight: '6px',
+                                              background: 'var(--bg-surface)'
+                                            }}
+                                          />
                                         </div>
-                                        <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-                                          {totalSoldBoxes} Boxes Total Sold
-                                        </span>
-                                      </div>
-
-                                      {/* Total Deductions */}
-                                      <div style={{
-                                        background: 'rgba(239, 68, 68, 0.05)',
-                                        border: '1px solid rgba(239, 68, 68, 0.22)',
-                                        borderRadius: '10px',
-                                        padding: '12px 14px'
-                                      }}>
-                                        <span style={{ fontSize: '0.68rem', textTransform: 'uppercase', color: '#dc2626', fontWeight: 800, display: 'block' }}>
-                                          Total Deductions (-)
-                                        </span>
-                                        <div style={{ fontSize: '1.25rem', fontWeight: 900, color: '#dc2626', marginTop: '2px' }}>
-                                          - ₹{totalDeductions.toLocaleString()}
+                                        <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', marginTop: '4px', lineHeight: '1.2' }}>
+                                          Vyapari se deduct
                                         </div>
-                                        <span style={{ fontSize: '0.72rem', color: '#dc2626' }}>
-                                          Comm: ₹{commAmount.toLocaleString()} • TF: ₹{fareAmount.toLocaleString()} • Kuli: ₹{kuliAmount.toLocaleString()}
-                                        </span>
-                                      </div>
-
-                                      {/* Final Net Invoice Total */}
-                                      <div style={{
-                                        background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.15) 0%, rgba(5, 150, 105, 0.15) 100%)',
-                                        border: '2px solid rgba(16, 185, 129, 0.4)',
-                                        borderRadius: '10px',
-                                        padding: '12px 14px'
-                                      }}>
-                                        <span style={{ fontSize: '0.68rem', textTransform: 'uppercase', color: '#047857', fontWeight: 900, display: 'block' }}>
-                                          FINAL INVOICE TOTAL (Payable)
-                                        </span>
-                                        <div style={{ fontSize: '1.35rem', fontWeight: 950, color: '#047857', marginTop: '2px' }}>
-                                          ₹{invoiceTotal.toLocaleString()}
-                                        </div>
-                                        <span style={{ fontSize: '0.72rem', color: '#065f46', fontWeight: 700 }}>
-                                          Net vyapari settlement amount
-                                        </span>
-                                      </div>
-
-                                      {/* Real-time Gross Margin */}
-                                      <div style={{
-                                        background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.12) 0%, rgba(99, 102, 241, 0.12) 100%)',
-                                        border: '1.5px solid rgba(59, 130, 246, 0.35)',
-                                        borderRadius: '10px',
-                                        padding: '12px 14px'
-                                      }}>
-                                        <span style={{ fontSize: '0.68rem', textTransform: 'uppercase', color: '#1d4ed8', fontWeight: 900, display: 'block' }}>
-                                          Real-Time Gross Margin
-                                        </span>
-                                        <div style={{ fontSize: '1.25rem', fontWeight: 900, color: '#1d4ed8', marginTop: '2px' }}>
-                                          ₹{grossMargin.toLocaleString()}
-                                        </div>
-                                        <span style={{ fontSize: '0.72rem', color: '#1e40af', fontWeight: 700 }}>
-                                          Aapka {commPct}% Aarhat Commission
-                                        </span>
                                       </div>
                                     </div>
 
                                     {/* Mandi Parchi Settlement Formula Strip */}
-                                    <div style={{
-                                      display: 'flex',
-                                      justifyContent: 'space-between',
-                                      alignItems: 'center',
-                                      background: 'var(--bg-main)',
-                                      padding: '10px 14px',
-                                      borderRadius: '8px',
-                                      border: '1px solid var(--border-subtle)',
-                                      fontSize: '0.76rem',
-                                      flexWrap: 'wrap',
-                                      gap: '8px'
-                                    }}>
-                                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                                    <div
+                                      className="truck-settlement-formula"
+                                      style={{
+                                        display: 'flex',
+                                        justifyContent: 'space-between',
+                                        alignItems: 'center',
+                                        background: 'var(--bg-main)',
+                                        padding: '10px 14px',
+                                        borderRadius: '8px',
+                                        border: '1px solid var(--border-subtle)',
+                                        fontSize: '0.76rem',
+                                        flexWrap: 'wrap',
+                                        gap: '8px'
+                                      }}
+                                    >
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', minWidth: 0 }}>
                                         <span style={{ fontWeight: 700, color: 'var(--text-secondary)' }}>Calculation Summary:</span>
-                                        <span style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--text-main)' }}>
-                                          Total Sold (₹{totalSoldValue.toLocaleString()}) - Commission (₹{commAmount.toLocaleString()}) - TF (₹{fareAmount.toLocaleString()}) - Kuli (₹{kuliAmount.toLocaleString()})
+                                        <span style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--text-main)', wordBreak: 'break-word' }}>
+                                          Total Sold (₹{totalSoldValue.toLocaleString()}) - Commission (₹{commAmount.toLocaleString()}) - TF (₹{fareAmount.toLocaleString()}) - Kuli (₹{kuliAmount.toLocaleString()}){cashAmount > 0 ? ` - Cash (₹${cashAmount.toLocaleString()})` : ''}
                                         </span>
                                       </div>
-                                      <div style={{ fontWeight: 800, color: '#10b981', fontSize: '0.84rem' }}>
-                                        = Net Invoice: ₹{invoiceTotal.toLocaleString()}
+                                      <div style={{ fontWeight: 800, color: '#10b981', fontSize: '0.84rem', whiteSpace: 'nowrap' }}>
+                                        = Total Amount: ₹{invoiceTotal.toLocaleString()}
                                       </div>
                                     </div>
                                   </div>
@@ -8161,17 +9345,6 @@ Branch: ${supp.branch_name || 'N/A'}`;
                     onChange={(e) => setPassbookForm({ ...passbookForm, phone: e.target.value })}
                   />
                 </div>
-
-                {/* <div className="form-group" style={{ margin: 0 }}>
-                  <label className="form-label">City / Mandi Location</label>
-                  <input
-                    type="text"
-                    className="form-control"
-                    placeholder="e.g. Azadpur Mandi / Sopore"
-                    value={passbookForm.city || ''}
-                    onChange={(e) => setPassbookForm({ ...passbookForm, city: e.target.value })}
-                  />
-                </div> */}
               </div>
 
               <div style={{
@@ -8702,7 +9875,7 @@ Branch: ${supp.branch_name || 'N/A'}`;
                               🚚 {inv.truck_no}
                             </div>
                             <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
-                              📅 {inv.saved_date}
+                              📅 {formatDisplayDate(inv.saved_date)}
                             </div>
                           </div>
                           <div style={{ textAlign: 'right' }}>
@@ -8897,7 +10070,7 @@ Branch: ${supp.branch_name || 'N/A'}`;
                           }}>{pay.payment_method}</span>
                         </div>
                         <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '3px' }}>
-                          📅 {pay.date}
+                          📅 {formatDisplayDate(pay.date)}
                           {pay.truck_no && <span> • 🚚 {pay.truck_no}</span>}
                           {pay.reference && <span> • Ref: {pay.reference}</span>}
                         </div>

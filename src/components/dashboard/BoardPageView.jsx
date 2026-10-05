@@ -8,7 +8,6 @@ import {
   Clock,
   Check,
   Trash2,
-  Printer,
   Search,
   ArrowDown,
   X,
@@ -31,17 +30,11 @@ import {
   DollarSign
 } from 'lucide-react';
 import { api } from '../../services/api';
+import { formatDisplayDate } from '../../utils/dateUtils';
+import CashSellHistoryView from './CashSellHistoryView';
+import UdhaarHistoryView from './UdhaarHistoryView';
 
-const POPULAR_FRUITS = [
-  { name: 'Apple', emoji: '🍎', varieties: ['MB', 'B-Depo', 'Royal', 'Kinnaur', 'Delicious', 'Golden', 'Grade A'] },
-  { name: 'Banana', emoji: '🍌', varieties: ['G9', 'Robusta', 'Yellaki', 'Champa'] },
-  { name: 'Mango', emoji: '🥭', varieties: ['Dasheri', 'Alphonso', 'Chausa', 'Safeda', 'Langra'] },
-  { name: 'Pomegranate', emoji: '🍇', varieties: ['Bhagwa', 'Arakta', 'Ganesh'] },
-  { name: 'Orange', emoji: '🍊', varieties: ['Nagpur', 'Kinnow', 'Jaffa'] },
-  { name: 'Grapes', emoji: '🍇', varieties: ['Tas-e-Ganesh', 'Sonaka', 'Sharad Seedless'] },
-  { name: 'Papaya', emoji: '🍈', varieties: ['Taiwan 786', 'Red Lady'] },
-  { name: 'Kashmiri Almond', emoji: '🥜', varieties: ['Paper Shell', 'Kagzi'] }
-];
+
 
 export default function BoardPageView({
   supplierProfiles = [],
@@ -55,6 +48,8 @@ export default function BoardPageView({
   setSuppliers,
   customers = [],
   setCustomers,
+  purchasesList = [],
+  setActiveTab,
   showToast,
   setIsCustomerModalOpen,
   setIsSupplierTrucksModalOpen,
@@ -63,6 +58,24 @@ export default function BoardPageView({
   savedFruitVarieties = [],
   currentUser
 }) {
+  const [showCashSellPage, setShowCashSellPage] = useState(false);
+  const [showUdhaarPage, setShowUdhaarPage] = useState(false);
+
+  const handleOpenCashSellHistory = () => {
+    if (setActiveTab) {
+      setActiveTab('cash-sell-history');
+    } else {
+      setShowCashSellPage(true);
+    }
+  };
+
+  const handleOpenUdhaarHistory = () => {
+    if (setActiveTab) {
+      setActiveTab('udhaar-history');
+    } else {
+      setShowUdhaarPage(true);
+    }
+  };
   // ---------------------------------------------------------------------------
   // 1. Board Header Date & Day State
   // ---------------------------------------------------------------------------
@@ -75,7 +88,7 @@ export default function BoardPageView({
   };
 
   const [selectedBoardDate, setSelectedBoardDate] = useState(() => getSystemDate());
-  const [dateFilterMode, setDateFilterMode] = useState('ALL'); // 'ALL' (all active lots) | 'DATE' (only selected date)
+  const [lotFilterMode, setLotFilterMode] = useState('ACTIVE'); // 'ACTIVE' (balance > 0) | 'COMPLETED' (balance <= 0)
   const [boardSearchQuery, setBoardSearchQuery] = useState('');
 
   // Compute dynamic day of week name (e.g. WEDNESDAY, THURSDAY)
@@ -236,12 +249,25 @@ export default function BoardPageView({
   // ---------------------------------------------------------------------------
   // 2. Filter Lots & Active Selected Lot State
   // ---------------------------------------------------------------------------
+  const activeLotsCount = useMemo(() => {
+    return supplierProfiles.filter(lot => Number(lot.balance_box || 0) > 0).length;
+  }, [supplierProfiles]);
+
+  const completedLotsCount = useMemo(() => {
+    return supplierProfiles.filter(lot => Number(lot.balance_box || 0) <= 0).length;
+  }, [supplierProfiles]);
+
   const filteredLots = useMemo(() => {
     return supplierProfiles.filter(lot => {
-      // Date filter if enabled
-      if (dateFilterMode === 'DATE' && lot.date && lot.date !== selectedBoardDate) {
-        return false;
+      const bal = Number(lot.balance_box || 0);
+
+      // Mode: ACTIVE (balance > 0) vs COMPLETED (balance <= 0)
+      if (lotFilterMode === 'COMPLETED') {
+        if (bal > 0) return false;
+      } else {
+        if (bal <= 0) return false;
       }
+
       // Search query
       if (boardSearchQuery.trim()) {
         const q = boardSearchQuery.trim().toLowerCase();
@@ -254,7 +280,7 @@ export default function BoardPageView({
       }
       return true;
     });
-  }, [supplierProfiles, dateFilterMode, selectedBoardDate, boardSearchQuery]);
+  }, [supplierProfiles, lotFilterMode, boardSearchQuery]);
 
   const [selectedLotId, setSelectedLotId] = useState(null);
 
@@ -282,15 +308,14 @@ export default function BoardPageView({
   const [lotForm, setLotForm] = useState({
     supplier_name: '',
     phone: '',
-    city: 'Azadpur Mandi, Delhi',
     bank_name: '',
     account_number: '',
     ifsc_code: '',
     branch_name: '',
     date: getSystemDate(),
     truckno: '',
-    fruit: 'Apple',
-    variety: 'MB',
+    fruit: '',
+    variety: '',
     boxes: '',
     damage_boxes: '0'
   });
@@ -352,15 +377,14 @@ export default function BoardPageView({
     setLotForm({
       supplier_name: '',
       phone: '',
-      city: 'Azadpur Mandi, Delhi',
       bank_name: '',
       account_number: '',
       ifsc_code: '',
       branch_name: '',
       date: selectedBoardDate || getSystemDate(),
       truckno: '',
-      fruit: 'Apple',
-      variety: 'MB',
+      fruit: '',
+      variety: '',
       boxes: '',
       damage_boxes: '0'
     });
@@ -378,6 +402,11 @@ export default function BoardPageView({
     const cleanName = lotForm.supplier_name.trim();
     if (!cleanName) {
       if (showToast) showToast('Please enter Supplier Name', 'error');
+      return;
+    }
+    const cleanFruit = (lotForm.fruit || '').trim();
+    if (!cleanFruit) {
+      if (showToast) showToast('Please enter Fruit Name', 'error');
       return;
     }
     const totalBoxes = Number(lotForm.boxes);
@@ -405,7 +434,6 @@ export default function BoardPageView({
             supplier_name: cleanName,
             phone: (lotForm.phone || '').trim(),
             company_name: cleanName,
-            city: (lotForm.city || 'Azadpur Mandi, Delhi').trim(),
             bank_name: (lotForm.bank_name || '').trim(),
             account_number: (lotForm.account_number || '').trim(),
             ifsc_code: (lotForm.ifsc_code || '').trim(),
@@ -426,7 +454,7 @@ export default function BoardPageView({
         supplier_name: cleanName,
         truck_number: finalTruckNo,
         payment_date: lotForm.date,
-        fruit_name: (lotForm.fruit || 'Apple').trim(),
+        fruit_name: cleanFruit,
         variety: (lotForm.variety || '').trim(),
         no_of_boxes: totalBoxes,
         pay: totalBoxes * 1000,
@@ -449,8 +477,8 @@ export default function BoardPageView({
         branch_name: (lotForm.branch_name || matchedSup?.branch_name || '').trim(),
         truckno: finalTruckNo,
         date: lotForm.date || selectedBoardDate || getSystemDate(),
-        fruit: (lotForm.fruit || 'Apple').trim(),
-        variety: (lotForm.variety || 'MB').trim(),
+        fruit: cleanFruit,
+        variety: (lotForm.variety || '').trim(),
         boxes: totalBoxes,
         damage_boxes: damageBoxes,
         balance_box: balanceBoxes
@@ -458,14 +486,15 @@ export default function BoardPageView({
 
       setSupplierProfiles(prev => [newLot, ...prev]);
       setSelectedLotId(newLot.id);
+      setLotFilterMode('ACTIVE');
 
       if (saveFruitAndVariety) {
-        saveFruitAndVariety(lotForm.fruit, lotForm.variety);
+        saveFruitAndVariety(cleanFruit, lotForm.variety || '');
       }
 
       setIsAddLotModalOpen(false);
       if (showToast) {
-        showToast(`Lot saved! ${cleanName} - ${lotForm.fruit} ${lotForm.variety} (${balanceBoxes} Boxes)`, 'success');
+        showToast(`Lot saved! ${cleanName} - ${cleanFruit}${lotForm.variety ? ` (${lotForm.variety.trim()})` : ''} (${balanceBoxes} Boxes)`, 'success');
       }
     } catch (err) {
       if (showToast) showToast('Error saving lot entry: ' + err.message, 'error');
@@ -477,10 +506,62 @@ export default function BoardPageView({
   // ---------------------------------------------------------------------------
   // 4. Delete Lot Handler
   // ---------------------------------------------------------------------------
-  const handleDeleteLot = (lot) => {
+  const handleDeleteLot = async (lot) => {
     if (!lot) return;
     if (window.confirm(`Are you sure you want to delete Lot for ${lot.supplier_name} (${lot.truckno})?`)) {
-      setSupplierProfiles(prev => prev.filter(p => p.id !== lot.id));
+      // 0. Remove from backend database if registered
+      try {
+        if (lot.id && typeof lot.id === 'number' && lot.id < 1000000000000) {
+          await api.delete(`/purchases/orders/${lot.id}/`).catch(() => null);
+          await api.delete(`/purchases/truck-payments/${lot.id}/`).catch(() => null);
+        }
+        const matchedPO = (purchasesList || []).find(p =>
+          p.id === lot.id ||
+          (lot.truckno && (p.truck_number || '').trim().toUpperCase() === (lot.truckno || '').trim().toUpperCase())
+        );
+        if (matchedPO?.id && typeof matchedPO.id === 'number' && matchedPO.id < 1000000000000) {
+          await api.delete(`/purchases/orders/${matchedPO.id}/`).catch(() => null);
+          await api.delete(`/purchases/truck-payments/${matchedPO.id}/`).catch(() => null);
+        }
+      } catch {
+        // ignore network error
+      }
+
+      // 1. Remove from supplierProfiles
+      setSupplierProfiles(prev => {
+        const updated = prev.filter(p => p.id !== lot.id);
+        try { localStorage.setItem('dashboard_supplier_profiles', JSON.stringify(updated)); } catch { }
+        return updated;
+      });
+
+      // 2. Remove all sales associated with this deleted lot from truckSalesList
+      const lotTruckNorm = (lot.truckno || '').replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+      setTruckSalesList(prev => {
+        const updated = prev.filter(s => {
+          if (s.lot_id && String(s.lot_id) === String(lot.id)) return false;
+          if (lotTruckNorm && (s.truck_no || '').replace(/[^a-zA-Z0-9]/g, '').toUpperCase() === lotTruckNorm) return false;
+          return true;
+        });
+        try { localStorage.setItem('mandi_truck_sales', JSON.stringify(updated)); } catch { }
+        return updated;
+      });
+
+      // 3. Remove customer buy records associated with this lot
+      if (setCustomerProfiles) {
+        setCustomerProfiles(prev => {
+          const updated = (prev || []).map(c => ({
+            ...c,
+            buy_history: (c.buy_history || []).filter(b => {
+              if (b.lot_id && String(b.lot_id) === String(lot.id)) return false;
+              if (lotTruckNorm && (b.truck_no || '').replace(/[^a-zA-Z0-9]/g, '').toUpperCase() === lotTruckNorm) return false;
+              return true;
+            })
+          }));
+          try { localStorage.setItem('mandi_customer_profiles', JSON.stringify(updated)); } catch { }
+          return updated;
+        });
+      }
+
       if (selectedLotId === lot.id) {
         const remaining = supplierProfiles.filter(p => p.id !== lot.id);
         setSelectedLotId(remaining.length > 0 ? remaining[0].id : null);
@@ -781,7 +862,30 @@ export default function BoardPageView({
         });
       }
 
-      // 4. Reset Form NICHE and auto-focus for immediate next entry!
+      // 4. Persist to Backend MySQL
+      try {
+        await api.post('/sales/orders/', {
+          customer_name: cleanCustName,
+          phone: saleForm.phone || '',
+          city: saleForm.city || '',
+          order_date: selectedBoardDate || getSystemDate(),
+          truck_number: (activeLot.truckno || '').trim().toUpperCase(),
+          crates_sold: boxesToSell,
+          rate_per_crate: rate,
+          gross_amount: finalTotal,
+          subtotal: finalTotal,
+          grand_total: finalTotal,
+          paid_amount: paidAmount,
+          payment_terms: saleForm.payment_mode === 'CASH' ? 'CASH' : 'CREDIT',
+          product_name: activeLot.fruit || 'Fruit',
+          status: 'DISPATCHED'
+        });
+        window.dispatchEvent(new CustomEvent('erp:refresh-data'));
+      } catch (apiErr) {
+        console.warn('Backend sale sync note:', apiErr.message);
+      }
+
+      // 5. Reset Form NICHE and auto-focus for immediate next entry!
       setSaleForm(prev => ({
         ...prev,
         boxes: '',
@@ -816,9 +920,26 @@ export default function BoardPageView({
   // ---------------------------------------------------------------------------
   // 8. Delete Single Sale Entry from History
   // ---------------------------------------------------------------------------
-  const handleDeleteSaleEntry = (sale) => {
+  const handleDeleteSaleEntry = async (sale) => {
     if (!sale) return;
     if (window.confirm(`Delete sale entry for ${sale.customer_name} (${sale.boxes} BX)? ${sale.boxes} boxes will be refunded back to this lot balance.`)) {
+      // 0. Remove from backend database if registered
+      try {
+        if (sale.id && typeof sale.id === 'number' && sale.id < 1000000000000) {
+          await api.delete(`/sales/orders/${sale.id}/`).catch(() => null);
+        }
+        const matchedSale = (salesList || []).find(s =>
+          s.id === sale.id ||
+          (sale.order_no && s.order_no === sale.order_no) ||
+          (sale.invoice_no && s.invoice?.invoice_no === sale.invoice_no)
+        );
+        if (matchedSale?.id && typeof matchedSale.id === 'number' && matchedSale.id < 1000000000000) {
+          await api.delete(`/sales/orders/${matchedSale.id}/`).catch(() => null);
+        }
+      } catch {
+        // ignore network error
+      }
+
       // 1. Refund boxes to lot
       setSupplierProfiles(prev => prev.map(p => {
         if (p.id === activeLot.id) {
@@ -853,14 +974,19 @@ export default function BoardPageView({
   // ---------------------------------------------------------------------------
   // 8b. Clear All Daily Sales Data (Cash Sell, Udhaar, Total)
   // ---------------------------------------------------------------------------
-  const handleClearAllSales = () => {
+  const handleClearAllSales = async () => {
     if (window.confirm('Kya aap Cash Sell, Udhaar aur Total me jitna bhi price / sales data hai usko poori tarah delete karna chahte hain?')) {
+      // 0. Clear backend sales orders from database
+      try {
+        await api.delete('/sales/orders/clear-all/').catch(() => null);
+      } catch { }
+
       // 1. Clear truckSalesList
       setTruckSalesList([]);
       try {
         localStorage.removeItem('mandi_truck_sales');
         localStorage.setItem('mandi_truck_sales', '[]');
-      } catch {}
+      } catch { }
 
       // 2. Clear customer buy & payment histories and khata balances
       setCustomerProfiles(prev => {
@@ -877,7 +1003,7 @@ export default function BoardPageView({
         }));
         try {
           localStorage.setItem('mandi_customer_profiles', JSON.stringify(cleaned));
-        } catch {}
+        } catch { }
         return cleaned;
       });
 
@@ -889,7 +1015,7 @@ export default function BoardPageView({
         }));
         try {
           localStorage.setItem('dashboard_supplier_profiles', JSON.stringify(restored));
-        } catch {}
+        } catch { }
         return restored;
       });
 
@@ -897,59 +1023,43 @@ export default function BoardPageView({
     }
   };
 
-  // ---------------------------------------------------------------------------
-  // 9. Single Sale Print Receipt
-  // ---------------------------------------------------------------------------
-  const handlePrintSaleReceipt = (sale) => {
-    const printWin = window.open('', '_blank', 'width=450,height=600');
-    if (!printWin) {
-      if (showToast) showToast('Please allow popups to print receipt', 'error');
-      return;
-    }
-    const html = `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <title>Bikri Parchi - ${sale.customer_name}</title>
-        <style>
-          body { font-family: 'Courier New', monospace; padding: 20px; color: #000; }
-          .header { text-align: center; border-bottom: 2px dashed #000; padding-bottom: 10px; margin-bottom: 12px; }
-          .title { font-size: 18px; font-weight: bold; margin: 0; }
-          .subtitle { font-size: 11px; margin-top: 4px; }
-          .row { display: flex; justify-content: space-between; margin: 6px 0; font-size: 13px; }
-          .divider { border-top: 1px dashed #000; margin: 10px 0; }
-          .total { font-size: 16px; font-weight: bold; }
-          .footer { text-align: center; margin-top: 20px; font-size: 11px; }
-        </style>
-      </head>
-      <body>
-        <div class="header">
-          <div class="title">AZIZ INTERNATIONAL</div>
-          <div class="subtitle">Azadpur Mandi, Delhi • Fruits & Dry Fruits</div>
-          <div class="subtitle">BIKRI PARCHI / SALE INVOICE</div>
-        </div>
-        <div class="row"><span>Date:</span><span>${sale.selling_date || selectedBoardDate} ${sale.time || ''}</span></div>
-        <div class="row"><span>Party Name:</span><strong>${sale.customer_name}</strong></div>
-        <div class="row"><span>Truck No:</span><span>${sale.truck_no}</span></div>
-        <div class="row"><span>Supplier Lot:</span><span>${sale.supplier_name}</span></div>
-        <div class="row"><span>Fruit:</span><span>${sale.product_name}</span></div>
-        <div class="divider"></div>
-        <div class="row"><span>Quantity:</span><strong>${sale.boxes} Boxes</strong></div>
-        <div class="row"><span>Rate / Box:</span><span>₹${sale.rate_per_box}</span></div>
-        <div class="divider"></div>
-        <div class="row total"><span>TOTAL AMOUNT:</span><span>₹${Number(sale.total).toLocaleString()}</span></div>
-        <div class="row"><span>Payment Mode:</span><span>${sale.payment_mode}</span></div>
-        <div class="row"><span>Amount Paid:</span><span>₹${Number(sale.amount_paid || 0).toLocaleString()}</span></div>
-        <div class="divider"></div>
-        <div class="footer">Thank you! Shubh Labh 🙏</div>
-        <script>window.print();</script>
-      </body>
-      </html>
-    `;
-    printWin.document.open();
-    printWin.document.write(html);
-    printWin.document.close();
-  };
+
+
+  if (showCashSellPage) {
+    return (
+      <CashSellHistoryView
+        truckSalesList={truckSalesList}
+        customerProfiles={customerProfiles}
+        salesList={salesList}
+        supplierProfiles={supplierProfiles}
+        suppliers={suppliers}
+        purchasesList={purchasesList}
+        selectedBoardDate={selectedBoardDate}
+        onBack={() => setShowCashSellPage(false)}
+        formatDisplayDate={formatDisplayDate}
+        getSystemDate={getSystemDate}
+        showToast={showToast}
+      />
+    );
+  }
+
+  if (showUdhaarPage) {
+    return (
+      <UdhaarHistoryView
+        truckSalesList={truckSalesList}
+        customerProfiles={customerProfiles}
+        salesList={salesList}
+        supplierProfiles={supplierProfiles}
+        suppliers={suppliers}
+        purchasesList={purchasesList}
+        selectedBoardDate={selectedBoardDate}
+        onBack={() => setShowUdhaarPage(false)}
+        formatDisplayDate={formatDisplayDate}
+        getSystemDate={getSystemDate}
+        showToast={showToast}
+      />
+    );
+  }
 
   return (
     <div className="board-page-container" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
@@ -959,11 +1069,11 @@ export default function BoardPageView({
       <div
         className="board-top-header"
         style={{
-          background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)',
+          background: 'var(--bg-card, #ffffff)',
           borderRadius: '16px',
           padding: '16px 22px',
-          border: '1px solid rgba(255, 255, 255, 0.1)',
-          boxShadow: '0 8px 24px rgba(0, 0, 0, 0.25)',
+          border: '1.5px solid var(--border-subtle, #e2e8f0)',
+          boxShadow: 'var(--shadow-md, 0 4px 14px rgba(0, 0, 0, 0.05))',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
@@ -986,24 +1096,24 @@ export default function BoardPageView({
                 color: '#fff',
                 fontWeight: 900,
                 fontSize: '1.25rem',
-                boxShadow: '0 4px 12px rgba(16, 185, 129, 0.4)'
+                boxShadow: '0 4px 12px rgba(16, 185, 129, 0.3)'
               }}
             >
               ①
             </div>
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-                <h1 style={{ margin: 0, fontSize: '1.35rem', fontWeight: 900, color: '#ffffff', letterSpacing: '0.04em' }}>
+                <h1 style={{ margin: 0, fontSize: '1.35rem', fontWeight: 900, color: 'var(--text-main, #0f172a)', letterSpacing: '0.04em' }}>
                   BOARD <span style={{ color: '#10b981', fontWeight: 800 }}>[PAGE]</span>
                 </h1>
                 {/* DAY CAPSULE */}
                 <div
                   style={{
-                    background: 'rgba(16, 185, 129, 0.2)',
-                    border: '1.5px solid #10b981',
+                    background: 'rgba(16, 185, 129, 0.12)',
+                    border: '1.5px solid rgba(16, 185, 129, 0.35)',
                     borderRadius: '8px',
                     padding: '3px 10px',
-                    color: '#34d399',
+                    color: '#059669',
                     fontWeight: 900,
                     fontSize: '0.82rem',
                     letterSpacing: '0.08em',
@@ -1013,11 +1123,11 @@ export default function BoardPageView({
                     gap: '6px'
                   }}
                 >
-                  <Calendar size={13} color="#34d399" />
+                  <Calendar size={13} color="#059669" />
                   <span>{dayOfWeekName}</span>
                 </div>
               </div>
-              <div style={{ fontSize: '0.76rem', color: '#94a3b8', marginTop: '3px' }}>
+              <div style={{ fontSize: '0.76rem', color: 'var(--text-secondary, #64748b)', marginTop: '3px' }}>
                 Mandi Daily Lot Delivery & Rapid Bikri Parchi Board
               </div>
             </div>
@@ -1051,9 +1161,9 @@ export default function BoardPageView({
               type="button"
               onClick={() => setIsSupplierTrucksModalOpen(true)}
               style={{
-                background: 'rgba(255, 255, 255, 0.08)',
-                color: '#fff',
-                border: '1px solid rgba(255, 255, 255, 0.2)',
+                background: 'var(--bg-main, #f8fafc)',
+                color: 'var(--text-main, #0f172a)',
+                border: '1.5px solid var(--border-subtle, #e2e8f0)',
                 padding: '7px 13px',
                 borderRadius: '8px',
                 fontWeight: 700,
@@ -1061,10 +1171,11 @@ export default function BoardPageView({
                 display: 'flex',
                 alignItems: 'center',
                 gap: '6px',
-                cursor: 'pointer'
+                cursor: 'pointer',
+                transition: 'all 0.2s ease'
               }}
             >
-              <Truck size={14} />
+              <Truck size={14} color="var(--text-secondary, #64748b)" />
               <span>Supplier Passbooks</span>
             </button>
           </div>
@@ -1079,10 +1190,10 @@ export default function BoardPageView({
               display: 'flex',
               alignItems: 'center',
               gap: '8px',
-              background: 'rgba(255, 255, 255, 0.06)',
+              background: 'var(--bg-main, #f8fafc)',
               padding: '5px 10px',
               borderRadius: '12px',
-              border: '1px solid rgba(255, 255, 255, 0.12)'
+              border: '1.5px solid var(--border-subtle, #e2e8f0)'
             }}
           >
             <button
@@ -1091,32 +1202,37 @@ export default function BoardPageView({
               className="btn btn-sm"
               title="Previous Day"
               style={{
-                background: 'rgba(255, 255, 255, 0.08)',
-                border: 'none',
-                color: '#fff',
+                background: 'var(--bg-surface, #ffffff)',
+                border: '1px solid var(--border-subtle, #e2e8f0)',
+                color: 'var(--text-main, #0f172a)',
                 padding: '6px 8px',
                 borderRadius: '6px',
-                cursor: 'pointer'
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                boxShadow: '0 1px 3px rgba(0, 0, 0, 0.05)'
               }}
             >
               <ChevronLeft size={16} />
             </button>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <span style={{ fontSize: '0.75rem', fontWeight: 800, color: '#94a3b8', textTransform: 'uppercase' }}>DATE:</span>
+              <span style={{ fontSize: '0.75rem', fontWeight: 800, color: 'var(--text-muted, #64748b)', textTransform: 'uppercase' }}>DATE:</span>
               <input
                 type="date"
                 value={selectedBoardDate}
                 onChange={(e) => setSelectedBoardDate(e.target.value)}
                 style={{
-                  background: '#adb3c2ff',
-                  border: '1px solid rgba(52, 211, 153, 0.35)',
-                  color: '#000000ff',
+                  background: 'var(--bg-surface, #ffffff)',
+                  border: '1.5px solid var(--border-light, #cbd5e1)',
+                  color: 'var(--text-main, #0f172a)',
                   fontWeight: 800,
                   fontSize: '0.88rem',
                   borderRadius: '8px',
                   padding: '5px 10px',
-                  cursor: 'pointer'
+                  cursor: 'pointer',
+                  boxShadow: '0 1px 3px rgba(0, 0, 0, 0.04)'
                 }}
               />
             </div>
@@ -1127,12 +1243,16 @@ export default function BoardPageView({
               className="btn btn-sm"
               title="Next Day"
               style={{
-                background: 'rgba(255, 255, 255, 0.08)',
-                border: 'none',
-                color: '#fff',
+                background: 'var(--bg-surface, #ffffff)',
+                border: '1px solid var(--border-subtle, #e2e8f0)',
+                color: 'var(--text-main, #0f172a)',
                 padding: '6px 8px',
                 borderRadius: '6px',
-                cursor: 'pointer'
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                boxShadow: '0 1px 3px rgba(0, 0, 0, 0.05)'
               }}
             >
               <ChevronRight size={16} />
@@ -1150,7 +1270,8 @@ export default function BoardPageView({
                 borderRadius: '6px',
                 fontSize: '0.74rem',
                 fontWeight: 800,
-                cursor: 'pointer'
+                cursor: 'pointer',
+                boxShadow: '0 2px 6px rgba(16, 185, 129, 0.3)'
               }}
             >
               Today
@@ -1171,112 +1292,107 @@ export default function BoardPageView({
             {/* CASH SELL (ROKDA) */}
             <div
               className="board-sales-pill pill-cash"
-              title={`Daily Cash Sale on ${selectedBoardDate}`}
+              title="Click to view full Cash Sell History (Rokda Bikri Byora)"
+              onClick={handleOpenCashSellHistory}
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: '6px',
-                background: 'rgba(16, 185, 129, 0.16)',
-                border: '1.5px solid rgba(16, 185, 129, 0.45)',
-                padding: '5px 11px',
+                background: 'rgba(16, 185, 129, 0.1)',
+                border: '1.5px solid rgba(16, 185, 129, 0.35)',
+                padding: '5px 12px',
                 borderRadius: '8px',
                 fontSize: '0.78rem',
                 fontWeight: 800,
-                color: '#34d399',
-                boxShadow: '0 2px 8px rgba(16, 185, 129, 0.15)'
+                color: '#059669',
+                boxShadow: '0 2px 6px rgba(16, 185, 129, 0.08)',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease',
+                userSelect: 'none'
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.transform = 'translateY(-1.5px)';
+                e.currentTarget.style.boxShadow = '0 4px 12px rgba(16, 185, 129, 0.22)';
+                e.currentTarget.style.background = 'rgba(16, 185, 129, 0.18)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.transform = 'none';
+                e.currentTarget.style.boxShadow = '0 2px 6px rgba(16, 185, 129, 0.08)';
+                e.currentTarget.style.background = 'rgba(16, 185, 129, 0.1)';
               }}
             >
-              <Banknote size={14} color="#34d399" />
-              <span style={{ color: '#a7f3d0', fontSize: '0.74rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.02em' }}>Cash Sell:</span>
-              <span style={{ color: '#ffffff', fontWeight: 900, fontSize: '0.85rem' }}>
+              <Banknote size={14} color="#059669" />
+              <span style={{ color: '#047857', fontSize: '0.74rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.02em' }}>Cash Sell:</span>
+              <span className="board-pill-value" style={{ color: '#065f46', fontWeight: 900, fontSize: '0.85rem' }}>
                 ₹{dailyDateSalesMetrics.totalCashAmount.toLocaleString('en-IN')}
               </span>
+              <span style={{ fontSize: '0.68rem', color: '#059669', marginLeft: '2px', fontWeight: 800 }}>↗</span>
             </div>
 
             {/* UDHAAR (KHATA) */}
             <div
               className="board-sales-pill pill-udhaar"
-              title={`Daily Udhaar / Khata on ${selectedBoardDate}`}
+              title="Click to view full Udhaar History (Khata Bikri Byora)"
+              onClick={handleOpenUdhaarHistory}
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: '6px',
-                background: 'rgba(239, 68, 68, 0.16)',
-                border: '1.5px solid rgba(239, 68, 68, 0.45)',
-                padding: '5px 11px',
+                background: 'rgba(239, 68, 68, 0.08)',
+                border: '1.5px solid rgba(239, 68, 68, 0.3)',
+                padding: '5px 12px',
                 borderRadius: '8px',
                 fontSize: '0.78rem',
                 fontWeight: 800,
-                color: '#f87171',
-                boxShadow: '0 2px 8px rgba(239, 68, 68, 0.15)'
+                color: '#dc2626',
+                boxShadow: '0 2px 6px rgba(239, 68, 68, 0.08)',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease',
+                userSelect: 'none'
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.transform = 'translateY(-1.5px)';
+                e.currentTarget.style.boxShadow = '0 4px 12px rgba(239, 68, 68, 0.22)';
+                e.currentTarget.style.background = 'rgba(239, 68, 68, 0.16)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.transform = 'none';
+                e.currentTarget.style.boxShadow = '0 2px 6px rgba(239, 68, 68, 0.08)';
+                e.currentTarget.style.background = 'rgba(239, 68, 68, 0.08)';
               }}
             >
-              <BookOpen size={14} color="#f87171" />
-              <span style={{ color: '#fecaca', fontSize: '0.74rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.02em' }}>Udhaar:</span>
-              <span style={{ color: '#ffffff', fontWeight: 900, fontSize: '0.85rem' }}>
+              <BookOpen size={14} color="#dc2626" />
+              <span style={{ color: '#b91c1c', fontSize: '0.74rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.02em' }}>Udhaar:</span>
+              <span className="board-pill-value" style={{ color: '#991b1b', fontWeight: 900, fontSize: '0.85rem' }}>
                 ₹{dailyDateSalesMetrics.totalKhataAmount.toLocaleString('en-IN')}
               </span>
+              <span style={{ fontSize: '0.68rem', color: '#dc2626', marginLeft: '2px', fontWeight: 800 }}>↗</span>
             </div>
 
             {/* TOTAL DAY BIKRI */}
             <div
               className="board-sales-pill pill-total"
-              title={`Total Sales (Cash + Udhaar) on ${selectedBoardDate}`}
+              title={`Total Sales (Cash + Udhaar) on ${formatDisplayDate(selectedBoardDate)}`}
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: '6px',
-                background: 'rgba(59, 130, 246, 0.16)',
-                border: '1.5px solid rgba(59, 130, 246, 0.45)',
+                background: 'rgba(59, 130, 246, 0.08)',
+                border: '1.5px solid rgba(59, 130, 246, 0.3)',
                 padding: '5px 11px',
                 borderRadius: '8px',
                 fontSize: '0.78rem',
                 fontWeight: 800,
-                color: '#60a5fa',
-                boxShadow: '0 2px 8px rgba(59, 130, 246, 0.15)'
+                color: '#2563eb',
+                boxShadow: '0 2px 6px rgba(59, 130, 246, 0.08)'
               }}
             >
-              <TrendingUp size={14} color="#60a5fa" />
-              <span style={{ color: '#bfdbfe', fontSize: '0.74rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.02em' }}>Total:</span>
-              <span style={{ color: '#ffffff', fontWeight: 900, fontSize: '0.85rem' }}>
+              <TrendingUp size={14} color="#2563eb" />
+              <span style={{ color: '#1d4ed8', fontSize: '0.74rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.02em' }}>Total:</span>
+              <span className="board-pill-value" style={{ color: '#1e40af', fontWeight: 900, fontSize: '0.85rem' }}>
                 ₹{dailyDateSalesMetrics.totalDayBikri.toLocaleString('en-IN')}
               </span>
             </div>
-
-            {/* DELETE ALL SALES BUTTON */}
-            <button
-              type="button"
-              onClick={handleClearAllSales}
-              title="Cash Sell, Udhaar aur Total ka saara data poori tarah delete karein"
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '5px',
-                background: 'rgba(239, 68, 68, 0.18)',
-                border: '1.5px solid rgba(239, 68, 68, 0.5)',
-                padding: '5px 10px',
-                borderRadius: '8px',
-                fontSize: '0.76rem',
-                fontWeight: 800,
-                color: '#f87171',
-                cursor: 'pointer',
-                boxShadow: '0 2px 8px rgba(239, 68, 68, 0.18)',
-                transition: 'all 0.15s ease'
-              }}
-              onMouseEnter={e => {
-                e.currentTarget.style.background = '#ef4444';
-                e.currentTarget.style.color = '#ffffff';
-                e.currentTarget.style.borderColor = '#ef4444';
-              }}
-              onMouseLeave={e => {
-                e.currentTarget.style.background = 'rgba(239, 68, 68, 0.18)';
-                e.currentTarget.style.color = '#f87171';
-                e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.5)';
-              }}
-            >
-              <Trash2 size={13} />
-              <span>Delete All</span>
-            </button>
           </div>
         </div>
       </div>
@@ -1293,18 +1409,27 @@ export default function BoardPageView({
           {/* Title & Hint */}
           <div className="board-inward-title-group">
             <div className="board-inward-title">
-              <span className="board-inward-icon">📦</span>
-              <span className="board-inward-heading">Daily Inward Lots:</span>
-              <span className="board-inward-count-badge">{filteredLots.length}</span>
+              <span className="board-inward-icon">{lotFilterMode === 'COMPLETED' ? '✅' : '📦'}</span>
+              <span className="board-inward-heading">
+                {lotFilterMode === 'COMPLETED' ? 'Completed Lots:' : 'Daily Inward Lots:'}
+              </span>
+              <span
+                className="board-inward-count-badge"
+                style={{
+                  background: lotFilterMode === 'COMPLETED' ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)' : undefined
+                }}
+              >
+                {filteredLots.length}
+              </span>
             </div>
           </div>
 
-          {/* Search & Date Filter Controls */}
+          {/* Search & Mode Switch Button */}
           <div className="board-inward-controls">
             <div className="board-inward-search-box">
               <input
                 type="text"
-                placeholder="Search lot..."
+                placeholder={lotFilterMode === 'COMPLETED' ? "Search completed lot..." : "Search lot..."}
                 value={boardSearchQuery}
                 onChange={(e) => setBoardSearchQuery(e.target.value)}
                 className="board-inward-search-input"
@@ -1314,16 +1439,78 @@ export default function BoardPageView({
 
             <button
               type="button"
-              className={`board-inward-filter-btn ${dateFilterMode === 'DATE' ? 'active' : ''}`}
-              onClick={() => setDateFilterMode(prev => prev === 'ALL' ? 'DATE' : 'ALL')}
+              id="btn-lot-filter-mode"
+              className={`board-inward-filter-btn ${lotFilterMode === 'COMPLETED' ? 'active' : ''}`}
+              onClick={() => setLotFilterMode(prev => prev === 'ACTIVE' ? 'COMPLETED' : 'ACTIVE')}
+              title={lotFilterMode === 'COMPLETED' ? "Click to view active inward lots" : "Click to view completed lots (0 balance trucks)"}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                fontWeight: 700,
+                fontSize: '0.8rem',
+                cursor: 'pointer'
+              }}
             >
-              {dateFilterMode === 'DATE' ? 'Selected Date' : 'All Active Lots'}
+              {lotFilterMode === 'COMPLETED' ? (
+                <>
+                  <span>📦 Active Lots</span>
+                  {activeLotsCount > 0 && (
+                    <span style={{
+                      background: 'rgba(255, 255, 255, 0.3)',
+                      color: '#ffffff',
+                      padding: '1px 6px',
+                      borderRadius: '10px',
+                      fontSize: '0.72rem',
+                      fontWeight: 800
+                    }}>
+                      {activeLotsCount}
+                    </span>
+                  )}
+                </>
+              ) : (
+                <>
+                  <span>✅ Complete</span>
+                  {completedLotsCount > 0 && (
+                    <span style={{
+                      background: 'rgba(16, 185, 129, 0.12)',
+                      color: '#10b981',
+                      padding: '1px 6px',
+                      borderRadius: '10px',
+                      fontSize: '0.72rem',
+                      fontWeight: 800
+                    }}>
+                      {completedLotsCount}
+                    </span>
+                  )}
+                </>
+              )}
             </button>
           </div>
         </div>
 
         {/* The Row of Divs: Responsive Grid across Mobile, Tablets, iPads & Desktop */}
         <div className="board-lots-row">
+          {/* Empty state for Completed Lots */}
+          {filteredLots.length === 0 && lotFilterMode === 'COMPLETED' && (
+            <div
+              style={{
+                gridColumn: '1 / -1',
+                padding: '28px 16px',
+                textAlign: 'center',
+                background: 'var(--bg-surface)',
+                borderRadius: '14px',
+                border: '1.5px dashed var(--border-subtle)',
+                color: 'var(--text-secondary)'
+              }}
+            >
+              <div style={{ fontSize: '1.6rem', marginBottom: '6px' }}>🏁</div>
+              <div style={{ fontWeight: 800, fontSize: '0.9rem', color: 'var(--text-main)' }}>Koi Completed Lot Nahi Hai</div>
+              <div style={{ fontSize: '0.76rem', marginTop: '4px' }}>
+                Jab kisi truck lot ka balance 0 boxes ho jaayega, wo automatic yahan dikhega.
+              </div>
+            </div>
+          )}
           {/* Each Lot Div Card */}
           {filteredLots.map((lot) => {
             const isSelected = activeLot && activeLot.id === lot.id;
@@ -1442,57 +1629,59 @@ export default function BoardPageView({
             );
           })}
 
-          {/* THE PLUS [ + ] DIV - ALWAYS NEXT TO LOT DIVS IN GRID */}
-          <div
-            onClick={handleOpenAddLotModal}
-            className="board-add-lot-card"
-            style={{
-              minHeight: '115px',
-              borderRadius: '14px',
-              padding: '12px',
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: '6px',
-              cursor: 'pointer',
-              border: '2px dashed #10b981',
-              background: 'rgba(16, 185, 129, 0.04)',
-              transition: 'all 0.2s ease'
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = 'rgba(16, 185, 129, 0.12)';
-              e.currentTarget.style.borderColor = '#059669';
-              e.currentTarget.style.transform = 'translateY(-2px)';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'rgba(16, 185, 129, 0.04)';
-              e.currentTarget.style.borderColor = '#10b981';
-              e.currentTarget.style.transform = 'none';
-            }}
-            title="Click to add new Lot Delivery Entry"
-          >
+          {/* THE PLUS [ + ] DIV - ONLY IN ACTIVE LOTS MODE */}
+          {lotFilterMode !== 'COMPLETED' && (
             <div
-              className="board-add-lot-icon"
+              onClick={handleOpenAddLotModal}
+              className="board-add-lot-card"
               style={{
-                width: '38px',
-                height: '38px',
-                borderRadius: '50%',
-                background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-                color: '#ffffff',
+                minHeight: '115px',
+                borderRadius: '14px',
+                padding: '12px',
                 display: 'flex',
+                flexDirection: 'column',
                 alignItems: 'center',
                 justifyContent: 'center',
-                boxShadow: '0 4px 12px rgba(16, 185, 129, 0.35)'
+                gap: '6px',
+                cursor: 'pointer',
+                border: '2px dashed #10b981',
+                background: 'rgba(16, 185, 129, 0.04)',
+                transition: 'all 0.2s ease'
               }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = 'rgba(16, 185, 129, 0.12)';
+                e.currentTarget.style.borderColor = '#059669';
+                e.currentTarget.style.transform = 'translateY(-2px)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = 'rgba(16, 185, 129, 0.04)';
+                e.currentTarget.style.borderColor = '#10b981';
+                e.currentTarget.style.transform = 'none';
+              }}
+              title="Click to add new Lot Delivery Entry"
             >
-              <Plus size={22} strokeWidth={3} />
+              <div
+                className="board-add-lot-icon"
+                style={{
+                  width: '38px',
+                  height: '38px',
+                  borderRadius: '50%',
+                  background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                  color: '#ffffff',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  boxShadow: '0 4px 12px rgba(16, 185, 129, 0.35)'
+                }}
+              >
+                <Plus size={22} strokeWidth={3} />
+              </div>
+              <div style={{ textAlign: 'center' }}>
+                <div className="board-add-lot-title" style={{ fontSize: '0.86rem', fontWeight: 800, color: '#10b981' }}>+ Add Lot</div>
+                <div className="board-add-lot-sub" style={{ fontSize: '0.68rem', color: 'var(--text-secondary)' }}>Delivery Entry</div>
+              </div>
             </div>
-            <div style={{ textAlign: 'center' }}>
-              <div className="board-add-lot-title" style={{ fontSize: '0.86rem', fontWeight: 800, color: '#10b981' }}>+ Add Lot</div>
-              <div className="board-add-lot-sub" style={{ fontSize: '0.68rem', color: 'var(--text-secondary)' }}>Delivery Entry</div>
-            </div>
-          </div>
+          )}
         </div>
       </div>
 
@@ -1507,21 +1696,19 @@ export default function BoardPageView({
           style={{
             background: 'var(--bg-surface)',
             border: '2px solid rgba(16, 185, 129, 0.35)',
-            borderRadius: '16px',
-            padding: '16px 22px',
+            borderRadius: '14px',
+            padding: '12px 18px',
             display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            flexWrap: 'wrap',
-            gap: '16px',
-            boxShadow: '0 4px 16px rgba(0, 0, 0, 0.05)',
+            flexDirection: 'column',
+            gap: '8px',
+            boxShadow: '0 4px 16px rgba(0, 0, 0, 0.04)',
             position: 'relative'
           }}
         >
-          {/* Left Side: PIYUSH - APPLE, WB-1234, 1200, DAMAGE */}
-          <div className="board-lot-summary-left" style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <span style={{ fontSize: '1.25rem', fontWeight: 900, color: 'var(--text-main)', letterSpacing: '0.02em' }}>
+          {/* Top Row: Title, Truck Badge on Left & Delete Button on Top Right */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', width: '100%' }}>
+            <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '8px', flex: 1, minWidth: 0 }}>
+              <span className="board-lot-summary-title" style={{ fontSize: '1.18rem', fontWeight: 900, color: 'var(--text-main)', letterSpacing: '0.01em', lineHeight: '1.2' }}>
                 {activeLot.supplier_name} — {activeLot.fruit} {activeLot.variety ? `(${activeLot.variety})` : ''}
               </span>
               <span
@@ -1529,100 +1716,62 @@ export default function BoardPageView({
                   background: 'rgba(59, 130, 246, 0.12)',
                   color: '#2563eb',
                   border: '1px solid rgba(59, 130, 246, 0.3)',
-                  padding: '3px 8px',
+                  padding: '2px 8px',
                   borderRadius: '6px',
                   fontFamily: 'monospace',
                   fontWeight: 800,
-                  fontSize: '0.82rem'
+                  fontSize: '0.78rem',
+                  whiteSpace: 'nowrap',
+                  lineHeight: '1.2'
                 }}
               >
                 🚚 {activeLot.truckno}
               </span>
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: '14px', fontSize: '0.84rem', color: 'var(--text-secondary)' }}>
-              <span>
-                Total Inward: <strong style={{ color: 'var(--text-main)' }}>{activeLot.boxes} Boxes</strong>
-              </span>
-              <span>•</span>
-              <span style={{ color: Number(activeLot.damage_boxes) > 0 ? '#ef4444' : 'var(--text-secondary)', fontWeight: 700 }}>
-                Damage: {activeLot.damage_boxes || 0}
-              </span>
-              <span>•</span>
-              <span>Date: {activeLot.date}</span>
-              {activeLot.phone && (
-                <>
-                  <span>•</span>
-                  <span>📞 {activeLot.phone}</span>
-                </>
+              {Number(activeLot.balance_box || 0) <= 0 && (
+                <span
+                  style={{
+                    background: 'rgba(16, 185, 129, 0.12)',
+                    color: '#059669',
+                    border: '1px solid rgba(16, 185, 129, 0.3)',
+                    padding: '2px 8px',
+                    borderRadius: '6px',
+                    fontWeight: 800,
+                    fontSize: '0.75rem',
+                    whiteSpace: 'nowrap',
+                    lineHeight: '1.2'
+                  }}
+                >
+                  ✅ COMPLETED (0 BAL)
+                </span>
               )}
             </div>
-          </div>
 
-          {/* Right Side: Grade: B-Depo, S - 25, N - 15, Dlt [Trash] */}
-          <div className="board-lot-summary-right" style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
-            {/* Grade */}
-            <div
-              style={{
-                background: 'var(--bg-main)',
-                border: '1px solid var(--border-subtle)',
-                borderRadius: '8px',
-                padding: '6px 12px',
-                fontSize: '0.82rem'
-              }}
-            >
-              <span style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>Grade / Variety: </span>
-              <strong style={{ color: 'var(--text-main)' }}>{activeLot.variety || 'Standard'}</strong>
-            </div>
-
-            {/* S - Sold */}
-            <div
-              style={{
-                background: 'rgba(59, 130, 246, 0.1)',
-                border: '1px solid rgba(59, 130, 246, 0.3)',
-                borderRadius: '8px',
-                padding: '6px 14px',
-                fontSize: '0.88rem',
-                fontWeight: 900,
-                color: '#2563eb'
-              }}
-            >
-              S - {activeLotSoldBoxes} BX
-            </div>
-
-            {/* N - Net Balance */}
-            <div
-              style={{
-                background: liveNetBalanceBoxes <= 0 ? 'rgba(100, 116, 139, 0.1)' : 'rgba(16, 185, 129, 0.12)',
-                border: liveNetBalanceBoxes <= 0 ? '1px solid rgba(100, 116, 139, 0.3)' : '1.5px solid #10b981',
-                borderRadius: '8px',
-                padding: '6px 14px',
-                fontSize: '0.94rem',
-                fontWeight: 900,
-                color: liveNetBalanceBoxes <= 0 ? '#64748b' : '#059669'
-              }}
-            >
-              N - {liveNetBalanceBoxes} BX
-            </div>
-
-            {/* Dlt [Trash Icon] Button */}
+            {/* Dlt [Trash Icon] Button - Positioned at Top Right */}
             <button
               type="button"
+              className="board-lot-dlt-btn"
               onClick={() => handleDeleteLot(activeLot)}
               title="Delete this lot"
               style={{
                 background: 'rgba(239, 68, 68, 0.08)',
                 border: '1px solid rgba(239, 68, 68, 0.25)',
                 color: '#ef4444',
-                padding: '7px 12px',
-                borderRadius: '8px',
+                height: '24px',
+                minHeight: '24px',
+                maxHeight: '24px',
+                padding: '0 8px',
+                borderRadius: '5px',
                 cursor: 'pointer',
                 fontWeight: 700,
-                fontSize: '0.8rem',
-                display: 'flex',
+                fontSize: '0.72rem',
+                display: 'inline-flex',
                 alignItems: 'center',
-                gap: '5px',
-                transition: 'all 0.15s ease'
+                justifyContent: 'center',
+                gap: '4px',
+                transition: 'all 0.15s ease',
+                flexShrink: 0,
+                alignSelf: 'center',
+                lineHeight: 1
               }}
               onMouseEnter={(e) => {
                 e.currentTarget.style.background = 'rgba(239, 68, 68, 0.2)';
@@ -1633,9 +1782,89 @@ export default function BoardPageView({
                 e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.25)';
               }}
             >
-              <Trash2 size={14} />
+              <Trash2 size={11} />
               <span>Dlt</span>
             </button>
+          </div>
+
+          {/* Bottom Row: Metadata on Left & Stats Pills (Grade, S, N) on Right */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px', width: '100%' }}>
+            {/* Metadata (Total Inward, Damage, Date, Phone) */}
+            <div className="board-lot-summary-meta" style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '6px 10px', fontSize: '0.80rem', color: 'var(--text-secondary)', lineHeight: '1.2' }}>
+              <span style={{ whiteSpace: 'nowrap' }}>
+                Total Inward: <strong style={{ color: 'var(--text-main)' }}>{activeLot.boxes} Boxes</strong>
+              </span>
+              <span style={{ color: 'var(--text-muted, #94a3b8)' }}>•</span>
+              <span style={{ whiteSpace: 'nowrap', color: Number(activeLot.damage_boxes) > 0 ? '#ef4444' : 'var(--text-secondary)', fontWeight: 700 }}>
+                Damage: {activeLot.damage_boxes || 0}
+              </span>
+              <span style={{ color: 'var(--text-muted, #94a3b8)' }}>•</span>
+              <span style={{ whiteSpace: 'nowrap' }}>
+                Date: {formatDisplayDate(activeLot.date)}
+              </span>
+              {activeLot.phone && (
+                <>
+                  <span style={{ color: 'var(--text-muted, #94a3b8)' }}>•</span>
+                  <span style={{ whiteSpace: 'nowrap' }}>📞 {activeLot.phone}</span>
+                </>
+              )}
+            </div>
+
+            {/* Stats Badges: Grade, S, N */}
+            <div className="board-lot-summary-right" style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+              {/* Grade */}
+              <div
+                className="board-lot-summary-pill"
+                style={{
+                  background: 'var(--bg-main)',
+                  border: '1px solid var(--border-subtle)',
+                  borderRadius: '6px',
+                  padding: '4px 10px',
+                  fontSize: '0.78rem',
+                  whiteSpace: 'nowrap',
+                  lineHeight: '1.2'
+                }}
+              >
+                <span style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>Grade / Variety: </span>
+                <strong style={{ color: 'var(--text-main)' }}>{activeLot.variety || '-'}</strong>
+              </div>
+
+              {/* S - Sold */}
+              <div
+                className="board-lot-summary-pill"
+                style={{
+                  background: 'rgba(59, 130, 246, 0.1)',
+                  border: '1px solid rgba(59, 130, 246, 0.3)',
+                  borderRadius: '6px',
+                  padding: '4px 10px',
+                  fontSize: '0.82rem',
+                  fontWeight: 800,
+                  color: '#2563eb',
+                  whiteSpace: 'nowrap',
+                  lineHeight: '1.2'
+                }}
+              >
+                S – {activeLotSoldBoxes} BX
+              </div>
+
+              {/* N - Net Balance */}
+              <div
+                className="board-lot-summary-pill"
+                style={{
+                  background: liveNetBalanceBoxes <= 0 ? 'rgba(100, 116, 139, 0.1)' : 'rgba(16, 185, 129, 0.12)',
+                  border: liveNetBalanceBoxes <= 0 ? '1px solid rgba(100, 116, 139, 0.3)' : '1.5px solid #10b981',
+                  borderRadius: '6px',
+                  padding: '4px 10px',
+                  fontSize: '0.84rem',
+                  fontWeight: 900,
+                  color: liveNetBalanceBoxes <= 0 ? '#64748b' : '#059669',
+                  whiteSpace: 'nowrap',
+                  lineHeight: '1.2'
+                }}
+              >
+                N – {liveNetBalanceBoxes} BX
+              </div>
+            </div>
           </div>
         </div>
       ) : (
@@ -1680,7 +1909,7 @@ export default function BoardPageView({
           {/* ============================================================= */}
           {/* PART 1: ENTRY HISTORY (UPAR / TOP)                            */}
           {/* ============================================================= */}
-          <div style={{ padding: '18px 22px', borderBottom: '1.5px solid var(--border-subtle)', background: 'var(--bg-main)' }}>
+          <div style={{ padding: '18px 22px', borderBottom: liveNetBalanceBoxes > 0 ? '1.5px solid var(--border-subtle)' : 'none', background: 'var(--bg-main)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px', marginBottom: '12px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <span style={{ fontSize: '1.05rem', fontWeight: 900, color: 'var(--text-main)' }}>
@@ -1734,7 +1963,7 @@ export default function BoardPageView({
                 </div>
               </div>
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '280px', overflowY: 'auto', paddingRight: '4px' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '280px', overflowY: 'auto', paddingRight: '4px' }}>
                 {activeLotSales.map((sale) => {
                   const isRecent = recentSavedSaleId === sale.id;
 
@@ -1742,81 +1971,33 @@ export default function BoardPageView({
                     <div
                       key={sale.id}
                       style={{
-                        background: isRecent ? 'rgba(16, 185, 129, 0.14)' : 'var(--bg-surface)',
-                        border: isRecent ? '1.5px solid #10b981' : '1px solid var(--border-subtle)',
-                        borderRadius: '10px',
-                        padding: '10px 14px',
+                        background: isRecent ? 'rgba(16, 185, 129, 0.12)' : 'var(--bg-surface, #ffffff)',
+                        border: isRecent ? '1.5px solid #10b981' : '1px solid var(--border-subtle, #e2e8f0)',
+                        borderRadius: '8px',
+                        padding: '5px 10px',
                         display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        gap: '12px',
-                        transition: 'all 0.3s ease',
-                        boxShadow: isRecent ? '0 4px 14px rgba(16, 185, 129, 0.2)' : 'none'
+                        flexDirection: 'column',
+                        gap: '2px',
+                        transition: 'all 0.25s ease',
+                        boxShadow: isRecent ? '0 4px 14px rgba(16, 185, 129, 0.18)' : '0 1px 3px rgba(0,0,0,0.02)'
                       }}
                     >
-                      {/* Left: Customer Name - Quantity x Rate */}
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
-                        <div>
-                          <div style={{ fontWeight: 800, fontSize: '0.95rem', color: 'var(--text-main)' }}>
-                            {sale.customer_name}
-                          </div>
-                          <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                            <span>📅 {sale.selling_date}</span>
-                            {sale.time && <span>• ⏰ {sale.time}</span>}
-                            <span>•</span>
-                            <span
-                              style={{
-                                color: sale.payment_mode === 'CASH' ? '#10b981' : '#f59e0b',
-                                fontWeight: 700
-                              }}
-                            >
-                              {sale.payment_mode === 'CASH' ? 'ROKDA (CASH)' : 'KHATA (UDHAAR)'}
-                            </span>
-                          </div>
-                        </div>
-
-                        {/* Math Breakdown: 15 x 630 */}
+                      {/* Row 1: Customer Name on Left & Compact Delete Button on Right */}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px' }}>
                         <div
                           style={{
-                            background: 'var(--bg-main)',
-                            padding: '4px 10px',
-                            borderRadius: '6px',
-                            fontSize: '0.86rem',
-                            fontWeight: 700,
-                            color: 'var(--text-secondary)',
-                            fontFamily: 'monospace'
+                            fontWeight: 800,
+                            fontSize: '0.88rem',
+                            color: 'var(--text-main, #0f172a)',
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            flex: 1,
+                            lineHeight: '1.1'
                           }}
                         >
-                          {sale.boxes} BX × ₹{sale.rate_per_box}
+                          {sale.customer_name}
                         </div>
-                      </div>
-
-                      {/* Right: Total Amount + Print + Delete */}
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                        <div style={{ textAlign: 'right' }}>
-                          <span style={{ fontSize: '1.05rem', fontWeight: 900, color: '#10b981' }}>
-                            : ₹{Number(sale.total).toLocaleString()}
-                          </span>
-                        </div>
-
-                        <button
-                          type="button"
-                          onClick={() => handlePrintSaleReceipt(sale)}
-                          title="Print single parchi receipt"
-                          style={{
-                            background: 'none',
-                            border: '1px solid var(--border-subtle)',
-                            color: 'var(--text-secondary)',
-                            padding: '5px',
-                            borderRadius: '6px',
-                            cursor: 'pointer',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center'
-                          }}
-                        >
-                          <Printer size={14} />
-                        </button>
 
                         <button
                           type="button"
@@ -1824,18 +2005,98 @@ export default function BoardPageView({
                           title="Delete this sale entry (refunds boxes to lot)"
                           style={{
                             background: 'rgba(239, 68, 68, 0.08)',
-                            border: '1px solid rgba(239, 68, 68, 0.25)',
+                            border: '1px solid rgba(239, 68, 68, 0.22)',
                             color: '#ef4444',
-                            padding: '5px',
-                            borderRadius: '6px',
+                            width: '18px',
+                            height: '18px',
+                            minHeight: '18px',
+                            maxHeight: '18px',
+                            minWidth: '18px',
+                            maxWidth: '18px',
+                            padding: 0,
+                            borderRadius: '4px',
                             cursor: 'pointer',
-                            display: 'flex',
+                            display: 'inline-flex',
                             alignItems: 'center',
-                            justifyContent: 'center'
+                            justifyContent: 'center',
+                            flexShrink: 0,
+                            alignSelf: 'center',
+                            transition: 'all 0.15s ease',
+                            lineHeight: 1
+                          }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.background = '#ef4444';
+                            e.currentTarget.style.color = '#ffffff';
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.background = 'rgba(239, 68, 68, 0.08)';
+                            e.currentTarget.style.color = '#ef4444';
                           }}
                         >
-                          <Trash2 size={14} />
+                          <Trash2 size={10} />
                         </button>
+                      </div>
+
+                      {/* Row 2 (Name ke niche): Mode of Payment Badge + Payment Amount */}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px' }}>
+                        <span
+                          style={{
+                            fontSize: '0.62rem',
+                            fontWeight: 800,
+                            padding: '1px 6px',
+                            borderRadius: '8px',
+                            background: sale.payment_mode === 'CASH' ? 'rgba(16, 185, 129, 0.12)' : 'rgba(245, 158, 11, 0.14)',
+                            color: sale.payment_mode === 'CASH' ? '#047857' : '#b45309',
+                            border: sale.payment_mode === 'CASH' ? '1px solid rgba(16, 185, 129, 0.3)' : '1px solid rgba(245, 158, 11, 0.35)',
+                            whiteSpace: 'nowrap',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            lineHeight: '1.1'
+                          }}
+                        >
+                          {sale.payment_mode === 'CASH' ? 'ROKDA (CASH)' : 'KHATA (UDHAAR)'}
+                        </span>
+
+                        <span
+                          style={{
+                            fontSize: '0.94rem',
+                            fontWeight: 900,
+                            color: '#10b981',
+                            letterSpacing: '-0.01em',
+                            whiteSpace: 'nowrap',
+                            lineHeight: '1.1'
+                          }}
+                        >
+                          ₹{Number(sale.total).toLocaleString()}
+                        </span>
+                      </div>
+
+                      {/* Row 3: Date on Left & Boxes × Rate Breakdown on Right */}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px' }}>
+                        <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary, #64748b)', display: 'inline-flex', alignItems: 'center', gap: '3px', whiteSpace: 'nowrap', lineHeight: '1.1' }}>
+                          <span>📅</span>
+                          <span style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{formatDisplayDate(sale.selling_date)}</span>
+                        </div>
+
+                        {/* Math Breakdown: 10 BX × ₹980 */}
+                        <div
+                          style={{
+                            background: 'var(--bg-main, #f8fafc)',
+                            border: '1px solid var(--border-subtle, #e2e8f0)',
+                            padding: '1px 6px',
+                            borderRadius: '4px',
+                            fontSize: '0.74rem',
+                            fontWeight: 700,
+                            color: 'var(--text-secondary, #475569)',
+                            fontFamily: 'monospace',
+                            whiteSpace: 'nowrap',
+                            lineHeight: '1.1'
+                          }}
+                        >
+                          <span style={{ color: '#2563eb', fontWeight: 800 }}>{sale.boxes} BX</span>
+                          <span style={{ margin: '0 3px', color: 'var(--text-muted, #94a3b8)' }}>×</span>
+                          <span>₹{Number(sale.rate_per_box).toLocaleString()}</span>
+                        </div>
                       </div>
                     </div>
                   );
@@ -1847,301 +2108,331 @@ export default function BoardPageView({
           {/* ============================================================= */}
           {/* PART 2: NEW SALE ENTRY FORM (NICHE / BOTTOM)                  */}
           {/* "form input niche phir data input kar ke save karenge phir o" */}
+          {/* Truck lot balance 0 hone par New Sale Entry form hide rahega */}
           {/* ============================================================= */}
-          <form
-            onSubmit={handleSaveSaleEntry}
-            style={{
-              padding: '20px 22px',
-              background: 'var(--bg-surface)',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '14px'
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span style={{ fontSize: '1.05rem', fontWeight: 900, color: 'var(--text-main)' }}>
-                  ➕ New Sale Entry (Bikri Parchi)
-                </span>
-                <span style={{ fontSize: '0.76rem', color: '#10b981', fontWeight: 700 }}>
-                  (Available Bal: {liveNetBalanceBoxes} Boxes)
-                </span>
-              </div>
+          {liveNetBalanceBoxes > 0 && (
+            <form
+              onSubmit={handleSaveSaleEntry}
+              className="board-bikri-form"
+              style={{
+                padding: '12px 16px',
+                background: 'var(--bg-surface)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '8px'
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap' }}>
+                  <span style={{ fontSize: '0.94rem', fontWeight: 900, color: 'var(--text-main)', whiteSpace: 'nowrap' }}>
+                    ➕ New Sale Entry (Bikri Parchi)
+                  </span>
+                  <span style={{ fontSize: '0.72rem', color: '#10b981', fontWeight: 700, whiteSpace: 'nowrap', background: 'rgba(16, 185, 129, 0.1)', padding: '1px 6px', borderRadius: '4px' }}>
+                    Bal: {liveNetBalanceBoxes} Boxes
+                  </span>
+                </div>
 
-              {/* Quick Party Mode Toggle: Cash Sale vs Name */}
-              <div
-                style={{
-                  display: 'flex',
-                  background: 'var(--bg-main)',
-                  padding: '3px',
-                  borderRadius: '8px',
-                  border: '1px solid var(--border-subtle)',
-                  gap: '4px'
-                }}
-              >
-                <button
-                  type="button"
-                  onClick={() => handleToggleCustomerType('CASH')}
+                {/* Quick Party Mode Toggle: Cash Sale vs Name */}
+                <div
                   style={{
-                    padding: '5px 12px',
-                    fontSize: '0.78rem',
-                    fontWeight: 800,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    background: 'var(--bg-main)',
+                    padding: '2px',
                     borderRadius: '6px',
-                    border: 'none',
-                    cursor: 'pointer',
-                    background: saleCustomerType === 'CASH' ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)' : 'transparent',
-                    color: saleCustomerType === 'CASH' ? '#fff' : 'var(--text-secondary)',
-                    boxShadow: saleCustomerType === 'CASH' ? '0 2px 6px rgba(16, 185, 129, 0.3)' : 'none'
+                    border: '1px solid var(--border-subtle)',
+                    gap: '2px'
                   }}
                 >
-                  💵 Cash Sale (Rokda)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleToggleCustomerType('NAME')}
-                  style={{
-                    padding: '5px 12px',
-                    fontSize: '0.78rem',
-                    fontWeight: 800,
-                    borderRadius: '6px',
-                    border: 'none',
-                    cursor: 'pointer',
-                    background: saleCustomerType === 'NAME' ? 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)' : 'transparent',
-                    color: saleCustomerType === 'NAME' ? '#fff' : 'var(--text-secondary)',
-                    boxShadow: saleCustomerType === 'NAME' ? '0 2px 6px rgba(59, 130, 246, 0.3)' : 'none'
-                  }}
-                >
-                  👤 Customer / Khata (Name)
-                </button>
-              </div>
-            </div>
-
-            {/* Input Row: Customer Name, Boxes, Rate, Total Amount, Payment, Save */}
-            <div className="board-bikri-form-grid">
-              {/* Field 1: Customer / Party Name */}
-              <div className="board-bikri-field-name" style={{ position: 'relative' }}>
-                <label style={{ fontSize: '0.72rem', fontWeight: 800, color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
-                  {saleCustomerType === 'CASH' ? 'Party / Sale Type' : 'Customer Name *'}
-                </label>
-                {saleCustomerType === 'CASH' ? (
-                  <input
-                    type="text"
-                    value={saleForm.customer_name}
-                    readOnly
+                  <button
+                    type="button"
+                    onClick={() => handleToggleCustomerType('CASH')}
                     style={{
-                      width: '100%',
-                      padding: '9px 12px',
-                      borderRadius: '8px',
-                      border: '1.5px solid #10b981',
-                      background: 'rgba(16, 185, 129, 0.08)',
+                      height: '24px',
+                      minHeight: '24px',
+                      maxHeight: '24px',
+                      padding: '0 8px',
+                      fontSize: '0.70rem',
                       fontWeight: 800,
-                      color: '#059669',
-                      fontSize: '0.88rem'
+                      borderRadius: '4px',
+                      border: 'none',
+                      cursor: 'pointer',
+                      background: saleCustomerType === 'CASH' ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)' : 'transparent',
+                      color: saleCustomerType === 'CASH' ? '#fff' : 'var(--text-secondary)',
+                      boxShadow: saleCustomerType === 'CASH' ? '0 1px 4px rgba(16, 185, 129, 0.25)' : 'none',
+                      whiteSpace: 'nowrap',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      lineHeight: 1
                     }}
-                  />
-                ) : (
-                  <div>
+                  >
+                    💵 Cash Sale (Rokda)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleToggleCustomerType('NAME')}
+                    style={{
+                      height: '24px',
+                      minHeight: '24px',
+                      maxHeight: '24px',
+                      padding: '0 8px',
+                      fontSize: '0.70rem',
+                      fontWeight: 800,
+                      borderRadius: '4px',
+                      border: 'none',
+                      cursor: 'pointer',
+                      background: saleCustomerType === 'NAME' ? 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)' : 'transparent',
+                      color: saleCustomerType === 'NAME' ? '#fff' : 'var(--text-secondary)',
+                      boxShadow: saleCustomerType === 'NAME' ? '0 1px 4px rgba(59, 130, 246, 0.25)' : 'none',
+                      whiteSpace: 'nowrap',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      lineHeight: 1
+                    }}
+                  >
+                    👤 Customer / Khata (Name)
+                  </button>
+                </div>
+              </div>
+
+              {/* Input Row: Customer Name, Boxes, Rate, Total Amount, Payment, Save */}
+              <div className="board-bikri-form-grid">
+                {/* Field 1: Customer / Party Name */}
+                <div className="board-bikri-field-name" style={{ position: 'relative' }}>
+                  <label style={{ fontSize: '0.70rem', fontWeight: 800, color: 'var(--text-secondary)', display: 'block', marginBottom: '2px', lineHeight: 1.2 }}>
+                    {saleCustomerType === 'CASH' ? 'Party / Sale Type' : 'Customer Name *'}
+                  </label>
+                  {saleCustomerType === 'CASH' ? (
                     <input
-                      ref={saleCustInputRef}
                       type="text"
-                      placeholder="e.g. TIYASHA / Sharmaji"
                       value={saleForm.customer_name}
-                      onChange={(e) => handleSaleCustomerChange(e.target.value)}
-                      onFocus={() => saleForm.customer_name && handleSaleCustomerChange(saleForm.customer_name)}
-                      required
-                      autoComplete="off"
+                      readOnly
                       style={{
                         width: '100%',
-                        padding: '9px 12px',
-                        borderRadius: '8px',
-                        border: '1.5px solid var(--border-focus)',
-                        background: 'var(--bg-surface)',
-                        fontWeight: 700,
-                        color: 'var(--text-main)',
-                        fontSize: '0.88rem'
+                        height: '34px',
+                        padding: '6px 10px',
+                        borderRadius: '6px',
+                        border: '1.5px solid #10b981',
+                        background: 'rgba(16, 185, 129, 0.08)',
+                        fontWeight: 800,
+                        color: '#059669',
+                        fontSize: '0.84rem'
                       }}
                     />
-                    {showSaleCustSuggestions && saleCustSuggestions.length > 0 && (
-                      <div
+                  ) : (
+                    <div>
+                      <input
+                        ref={saleCustInputRef}
+                        type="text"
+                        placeholder="e.g. TIYASHA / Sharmaji"
+                        value={saleForm.customer_name}
+                        onChange={(e) => handleSaleCustomerChange(e.target.value)}
+                        onFocus={() => saleForm.customer_name && handleSaleCustomerChange(saleForm.customer_name)}
+                        required
+                        autoComplete="off"
                         style={{
-                          position: 'absolute',
-                          top: '100%',
-                          left: 0,
-                          right: 0,
-                          zIndex: 1000,
+                          width: '100%',
+                          height: '34px',
+                          padding: '6px 10px',
+                          borderRadius: '6px',
+                          border: '1.5px solid var(--border-focus)',
                           background: 'var(--bg-surface)',
-                          border: '1.5px solid #3b82f6',
-                          borderRadius: '8px',
-                          boxShadow: '0 8px 24px rgba(0, 0, 0, 0.2)',
-                          maxHeight: '180px',
-                          overflowY: 'auto',
-                          marginTop: '2px'
+                          fontWeight: 700,
+                          color: 'var(--text-main)',
+                          fontSize: '0.84rem'
                         }}
-                      >
-                        {saleCustSuggestions.map((c) => (
-                          <div
-                            key={c.id}
-                            onMouseDown={() => handleSelectSaleCustomer(c)}
-                            style={{
-                              padding: '8px 12px',
-                              cursor: 'pointer',
-                              display: 'flex',
-                              justifyContent: 'space-between',
-                              alignItems: 'center',
-                              borderBottom: '1px solid var(--border-subtle)',
-                              fontSize: '0.82rem'
-                            }}
-                          >
-                            <span style={{ fontWeight: 700, color: 'var(--text-main)' }}>{c.customer_name}</span>
-                            <span style={{ color: '#ef4444', fontSize: '0.72rem', fontWeight: 700 }}>
-                              Due: ₹{Number(c.current_balance || 0).toLocaleString()}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
+                      />
+                      {showSaleCustSuggestions && saleCustSuggestions.length > 0 && (
+                        <div
+                          style={{
+                            position: 'absolute',
+                            top: '100%',
+                            left: 0,
+                            right: 0,
+                            zIndex: 1000,
+                            background: 'var(--bg-surface)',
+                            border: '1.5px solid #3b82f6',
+                            borderRadius: '8px',
+                            boxShadow: '0 8px 24px rgba(0, 0, 0, 0.2)',
+                            maxHeight: '180px',
+                            overflowY: 'auto',
+                            marginTop: '2px'
+                          }}
+                        >
+                          {saleCustSuggestions.map((c) => (
+                            <div
+                              key={c.id}
+                              onMouseDown={() => handleSelectSaleCustomer(c)}
+                              style={{
+                                padding: '8px 12px',
+                                cursor: 'pointer',
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                borderBottom: '1px solid var(--border-subtle)',
+                                fontSize: '0.82rem'
+                              }}
+                            >
+                              <span style={{ fontWeight: 700, color: 'var(--text-main)' }}>{c.customer_name}</span>
+                              <span style={{ color: '#ef4444', fontSize: '0.72rem', fontWeight: 700 }}>
+                                Due: ₹{Number(c.current_balance || 0).toLocaleString()}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
 
-              {/* Field 2: Boxes */}
-              <div className="board-bikri-field-boxes">
-                <label style={{ fontSize: '0.72rem', fontWeight: 800, color: '#10b981', display: 'block', marginBottom: '4px' }}>
-                  Boxes (Max: {liveNetBalanceBoxes}) *
-                </label>
-                <input
-                  ref={saleBoxesInputRef}
-                  type="number"
-                  inputMode="numeric"
-                  min="1"
-                  max={liveNetBalanceBoxes}
-                  placeholder="0"
-                  value={saleForm.boxes}
-                  onChange={(e) => handleSaleBoxesChange(e.target.value)}
-                  required
-                  disabled={liveNetBalanceBoxes <= 0}
-                  style={{
-                    width: '100%',
-                    padding: '9px 12px',
-                    borderRadius: '8px',
-                    border: '1.5px solid #10b981',
-                    background: 'var(--bg-surface)',
-                    fontWeight: 900,
-                    fontSize: '1rem',
-                    color: '#10b981'
-                  }}
-                />
-              </div>
+                {/* Field 2: Boxes */}
+                <div className="board-bikri-field-boxes">
+                  <label style={{ fontSize: '0.70rem', fontWeight: 800, color: '#10b981', display: 'block', marginBottom: '2px', lineHeight: 1.2 }}>
+                    Boxes (Max: {liveNetBalanceBoxes}) *
+                  </label>
+                  <input
+                    ref={saleBoxesInputRef}
+                    type="number"
+                    inputMode="numeric"
+                    min="1"
+                    max={liveNetBalanceBoxes}
+                    placeholder="0"
+                    value={saleForm.boxes}
+                    onChange={(e) => handleSaleBoxesChange(e.target.value)}
+                    required
+                    disabled={liveNetBalanceBoxes <= 0}
+                    style={{
+                      width: '100%',
+                      height: '34px',
+                      padding: '6px 10px',
+                      borderRadius: '6px',
+                      border: '1.5px solid #10b981',
+                      background: 'var(--bg-surface)',
+                      fontWeight: 900,
+                      fontSize: '0.92rem',
+                      color: '#10b981'
+                    }}
+                  />
+                </div>
 
-              {/* Field 3: Rate / Box (₹) */}
-              <div className="board-bikri-field-rate">
-                <label style={{ fontSize: '0.72rem', fontWeight: 800, color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
-                  Rate / Box (₹) *
-                </label>
-                <input
-                  ref={saleRateInputRef}
-                  type="number"
-                  inputMode="numeric"
-                  min="1"
-                  step="any"
-                  placeholder="e.g. 630"
-                  value={saleForm.rate_per_box}
-                  onChange={(e) => handleSaleRateChange(e.target.value)}
-                  required
-                  disabled={liveNetBalanceBoxes <= 0}
-                  style={{
-                    width: '100%',
-                    padding: '9px 12px',
-                    borderRadius: '8px',
-                    border: '1.5px solid var(--border-subtle)',
-                    background: 'var(--bg-surface)',
-                    fontWeight: 800,
-                    fontSize: '1rem',
-                    color: 'var(--text-main)'
-                  }}
-                />
-              </div>
+                {/* Field 3: Rate / Box (₹) */}
+                <div className="board-bikri-field-rate">
+                  <label style={{ fontSize: '0.70rem', fontWeight: 800, color: 'var(--text-secondary)', display: 'block', marginBottom: '2px', lineHeight: 1.2 }}>
+                    Rate / Box (₹) *
+                  </label>
+                  <input
+                    ref={saleRateInputRef}
+                    type="number"
+                    inputMode="numeric"
+                    min="1"
+                    step="any"
+                    placeholder="e.g. 630"
+                    value={saleForm.rate_per_box}
+                    onChange={(e) => handleSaleRateChange(e.target.value)}
+                    required
+                    disabled={liveNetBalanceBoxes <= 0}
+                    style={{
+                      width: '100%',
+                      height: '34px',
+                      padding: '6px 10px',
+                      borderRadius: '6px',
+                      border: '1.5px solid var(--border-subtle)',
+                      background: 'var(--bg-surface)',
+                      fontWeight: 800,
+                      fontSize: '0.92rem',
+                      color: 'var(--text-main)'
+                    }}
+                  />
+                </div>
 
-              {/* Field 4: Total Amount (₹) (Bi-directional Calculator) */}
-              <div className="board-bikri-field-total">
-                <label style={{ fontSize: '0.72rem', fontWeight: 800, color: '#047857', display: 'block', marginBottom: '4px' }}>
-                  Total Amount (₹)
-                </label>
-                <input
-                  type="number"
-                  inputMode="numeric"
-                  min="0"
-                  placeholder="Auto or enter"
-                  value={saleForm.total_amount}
-                  onChange={(e) => handleSaleTotalChange(e.target.value)}
-                  disabled={liveNetBalanceBoxes <= 0}
-                  style={{
-                    width: '100%',
-                    padding: '9px 12px',
-                    borderRadius: '8px',
-                    border: '1.5px solid rgba(16, 185, 129, 0.5)',
-                    background: 'rgba(16, 185, 129, 0.05)',
-                    fontWeight: 900,
-                    fontSize: '1rem',
-                    color: '#047857'
-                  }}
-                />
-              </div>
+                {/* Field 4: Total Amount (₹) (Bi-directional Calculator) */}
+                <div className="board-bikri-field-total">
+                  <label style={{ fontSize: '0.70rem', fontWeight: 800, color: '#047857', display: 'block', marginBottom: '2px', lineHeight: 1.2 }}>
+                    Total Amount (₹)
+                  </label>
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    min="0"
+                    placeholder="Auto or enter"
+                    value={saleForm.total_amount}
+                    onChange={(e) => handleSaleTotalChange(e.target.value)}
+                    disabled={liveNetBalanceBoxes <= 0}
+                    style={{
+                      width: '100%',
+                      height: '34px',
+                      padding: '6px 10px',
+                      borderRadius: '6px',
+                      border: '1.5px solid rgba(16, 185, 129, 0.5)',
+                      background: 'rgba(16, 185, 129, 0.05)',
+                      fontWeight: 900,
+                      fontSize: '0.92rem',
+                      color: '#047857'
+                    }}
+                  />
+                </div>
 
-              {/* Field 5: Payment Mode */}
-              <div className="board-bikri-field-mode">
-                <label style={{ fontSize: '0.72rem', fontWeight: 800, color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
-                  Payment Mode
-                </label>
-                <select
-                  value={saleForm.payment_mode}
-                  onChange={(e) => setSaleForm({ ...saleForm, payment_mode: e.target.value })}
-                  style={{
-                    width: '100%',
-                    padding: '9px 10px',
-                    borderRadius: '8px',
-                    border: '1.5px solid var(--border-subtle)',
-                    background: 'var(--bg-surface)',
-                    fontWeight: 700,
-                    fontSize: '0.85rem',
-                    color: 'var(--text-main)'
-                  }}
-                >
-                  <option value="CASH">Cash (Rokda)</option>
-                  <option value="CREDIT">Khata / Credit (Udhaar)</option>
-                  <option value="UPI">UPI / GPay</option>
-                </select>
-              </div>
+                {/* Field 5: Payment Mode */}
+                <div className="board-bikri-field-mode">
+                  <label style={{ fontSize: '0.70rem', fontWeight: 800, color: 'var(--text-secondary)', display: 'block', marginBottom: '2px', lineHeight: 1.2 }}>
+                    Payment Mode
+                  </label>
+                  <select
+                    value={saleForm.payment_mode}
+                    onChange={(e) => setSaleForm({ ...saleForm, payment_mode: e.target.value })}
+                    style={{
+                      width: '100%',
+                      height: '34px',
+                      padding: '6px 8px',
+                      borderRadius: '6px',
+                      border: '1.5px solid var(--border-subtle)',
+                      background: 'var(--bg-surface)',
+                      fontWeight: 700,
+                      fontSize: '0.80rem',
+                      color: 'var(--text-main)'
+                    }}
+                  >
+                    <option value="CASH">Cash (Rokda)</option>
+                    <option value="CREDIT">Khata / Credit (Udhaar)</option>
+                    <option value="UPI">UPI / GPay</option>
+                  </select>
+                </div>
 
-              {/* Field 6: Save Entry Button */}
-              <div className="board-bikri-field-submit">
-                <button
-                  type="submit"
-                  disabled={isSubmittingSale || liveNetBalanceBoxes <= 0}
-                  style={{
-                    width: '100%',
-                    padding: '10px 16px',
-                    background: liveNetBalanceBoxes <= 0 ? '#64748b' : 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-                    color: '#ffffff',
-                    border: 'none',
-                    borderRadius: '8px',
-                    fontWeight: 900,
-                    fontSize: '0.92rem',
-                    cursor: liveNetBalanceBoxes <= 0 ? 'not-allowed' : 'pointer',
-                    boxShadow: liveNetBalanceBoxes <= 0 ? 'none' : '0 4px 14px rgba(16, 185, 129, 0.35)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '6px',
-                    transition: 'all 0.15s ease'
-                  }}
-                >
-                  <Check size={16} strokeWidth={3} />
-                  <span>{isSubmittingSale ? 'Saving...' : 'Save Entry ↵'}</span>
-                </button>
+                {/* Field 6: Save Entry Button */}
+                <div className="board-bikri-field-submit">
+                  <button
+                    type="submit"
+                    disabled={isSubmittingSale || liveNetBalanceBoxes <= 0}
+                    style={{
+                      width: '100%',
+                      height: '34px',
+                      minHeight: '34px',
+                      maxHeight: '34px',
+                      padding: '0 14px',
+                      background: liveNetBalanceBoxes <= 0 ? '#64748b' : 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                      color: '#ffffff',
+                      border: 'none',
+                      borderRadius: '6px',
+                      fontWeight: 900,
+                      fontSize: '0.84rem',
+                      cursor: liveNetBalanceBoxes <= 0 ? 'not-allowed' : 'pointer',
+                      boxShadow: liveNetBalanceBoxes <= 0 ? 'none' : '0 3px 10px rgba(16, 185, 129, 0.3)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '5px',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    <Check size={14} strokeWidth={3} />
+                    <span>{isSubmittingSale ? 'Saving...' : 'Save Entry ↵'}</span>
+                  </button>
+                </div>
               </div>
-            </div>
-          </form>
+            </form>
+          )}
         </div>
       )}
 
@@ -2293,14 +2584,13 @@ export default function BoardPageView({
 
                 <div>
                   <label style={{ fontSize: '0.74rem', fontWeight: 800, color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
-                    Truck Number *
+                    Truck Number
                   </label>
                   <input
                     type="text"
                     placeholder="e.g. WB-1234"
                     value={lotForm.truckno}
                     onChange={(e) => setLotForm({ ...lotForm, truckno: e.target.value })}
-                    required
                     style={{
                       width: '100%',
                       padding: '9px 12px',
@@ -2324,7 +2614,7 @@ export default function BoardPageView({
                   </label>
                   <input
                     type="text"
-                    placeholder="e.g. Apple / Banana"
+                    placeholder="Enter Fruit Name (e.g. Apple / Banana)"
                     value={lotForm.fruit}
                     onChange={(e) => setLotForm({ ...lotForm, fruit: e.target.value })}
                     required
@@ -2347,7 +2637,7 @@ export default function BoardPageView({
                   </label>
                   <input
                     type="text"
-                    placeholder="e.g. MB / B-Depo / Royal"
+                    placeholder="Enter Variety / Marka / Grade (optional)"
                     value={lotForm.variety}
                     onChange={(e) => setLotForm({ ...lotForm, variety: e.target.value })}
                     style={{
@@ -2362,35 +2652,6 @@ export default function BoardPageView({
                     }}
                   />
                 </div>
-              </div>
-
-              {/* Quick Fruit Selection Chips */}
-              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                {POPULAR_FRUITS.map(f => (
-                  <button
-                    key={f.name}
-                    type="button"
-                    onClick={() => {
-                      setLotForm(prev => ({
-                        ...prev,
-                        fruit: f.name,
-                        variety: f.varieties[0] || ''
-                      }));
-                    }}
-                    style={{
-                      padding: '3px 8px',
-                      borderRadius: '6px',
-                      border: lotForm.fruit.toLowerCase() === f.name.toLowerCase() ? '1.5px solid #10b981' : '1px solid var(--border-subtle)',
-                      background: lotForm.fruit.toLowerCase() === f.name.toLowerCase() ? 'rgba(16, 185, 129, 0.12)' : 'var(--bg-main)',
-                      color: 'var(--text-main)',
-                      fontSize: '0.72rem',
-                      fontWeight: 700,
-                      cursor: 'pointer'
-                    }}
-                  >
-                    <span>{f.emoji} {f.name}</span>
-                  </button>
-                ))}
               </div>
 
               {/* Row 3: Total Boxes & Damage Boxes */}

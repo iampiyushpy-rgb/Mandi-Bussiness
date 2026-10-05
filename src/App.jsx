@@ -18,7 +18,13 @@ import {
 import { api } from './services/api';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState('dashboard');
+  const [activeTab, setActiveTabRaw] = useState(() => {
+    return sessionStorage.getItem('erp_active_tab') || 'dashboard';
+  });
+  const setActiveTab = (tab) => {
+    sessionStorage.setItem('erp_active_tab', tab);
+    setActiveTabRaw(tab);
+  };
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -146,8 +152,13 @@ export default function App() {
   useEffect(() => {
     if (!isAuthenticated) return;
     loadAllData();
-    const interval = setInterval(loadAllData, 10000); // 10s auto-sync
-    return () => clearInterval(interval);
+    const handleRefresh = () => loadAllData();
+    window.addEventListener('erp:refresh-data', handleRefresh);
+    const interval = setInterval(loadAllData, 60000); // 60s background sync
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('erp:refresh-data', handleRefresh);
+    };
   }, [isAuthenticated]);
 
   // SPA In-Page Navigation Handlers
@@ -225,6 +236,7 @@ export default function App() {
           theme={theme}
           toggleTheme={toggleTheme}
           currentUser={currentUser}
+          onLogout={handleLogout}
         />
 
         <main className="erp-content" id="mandi-spa-content">

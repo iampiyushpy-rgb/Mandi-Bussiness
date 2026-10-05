@@ -2,9 +2,9 @@ import React from 'react';
 import {
   LayoutDashboard,
   Apple,
-  LogOut,
   X,
-  Banknote
+  ReceiptText,
+  Wallet
 } from 'lucide-react';
 
 export default function Sidebar({
@@ -36,11 +36,22 @@ export default function Sidebar({
       }
     },
     {
+      id: 'cash-sell-transactions',
+      label: 'Cash Sell Transactions',
+      subtitle: 'Collection & Expenses',
+      icon: Wallet,
+      badge: 'Txn',
+      badgeColor: '#8b5cf6',
+      action: () => {
+        if (setActiveTab) setActiveTab('cash-sell-transactions');
+      }
+    },
+    {
       id: 'cash-sale',
       label: 'Party Khata',
-      subtitle: 'Net Invoice & Payments',
-      icon: Banknote,
-      badge: 'New',
+      subtitle: 'Suppliers & History',
+      icon: ReceiptText,
+      badge: 'Khata',
       badgeColor: '#f59e0b',
       action: () => {
         if (setActiveTab) setActiveTab('cash-sale');
@@ -148,44 +159,6 @@ export default function Sidebar({
             );
           })}
         </div>
-
-        {onLogout && (
-          <div style={{ padding: collapsed ? '12px 6px' : '12px 14px', borderTop: '1px solid var(--border-subtle)', marginTop: 'auto' }}>
-            <button
-              onClick={() => handleItemClick(onLogout)}
-              title="Log Out"
-              style={{
-                width: '100%',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: collapsed ? 'center' : 'flex-start',
-                gap: '10px',
-                padding: collapsed ? '10px 0' : '9px 12px',
-                borderRadius: '8px',
-                background: 'rgba(239, 68, 68, 0.08)',
-                border: '1px solid rgba(239, 68, 68, 0.25)',
-                color: '#ef4444',
-                fontWeight: 600,
-                fontSize: '0.84rem',
-                cursor: 'pointer',
-                transition: 'all 0.2s ease',
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)';
-                e.currentTarget.style.color = '#ffffff';
-                e.currentTarget.style.boxShadow = '0 4px 12px rgba(239, 68, 68, 0.35)';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = 'rgba(239, 68, 68, 0.08)';
-                e.currentTarget.style.color = '#ef4444';
-                e.currentTarget.style.boxShadow = 'none';
-              }}
-            >
-              <LogOut size={17} />
-              {!collapsed && <span>Log Out</span>}
-            </button>
-          </div>
-        )}
       </aside>
     </>
   );

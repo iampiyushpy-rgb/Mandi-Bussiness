@@ -4,9 +4,7 @@ import {
   User,
   Eye,
   EyeOff,
-  Sparkles,
   ArrowRight,
-  ShieldCheck,
   Apple,
   Sun,
   Moon
@@ -29,8 +27,8 @@ const FRUIT_PARTICLES = [
 ];
 
 export default function LoginView({ onLoginSuccess, theme, toggleTheme, showToast }) {
-  const [username, setUsername] = useState('admin');
-  const [password, setPassword] = useState('admin123');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -46,7 +44,6 @@ export default function LoginView({ onLoginSuccess, theme, toggleTheme, showToas
     setError('');
 
     try {
-      // Attempt backend login
       const response = await api.post('/auth/login/', {
         username: username.trim(),
         password: password
@@ -57,42 +54,19 @@ export default function LoginView({ onLoginSuccess, theme, toggleTheme, showToas
         if (response.refresh) localStorage.setItem('refresh_token', response.refresh);
         const userData = response.user || {
           username: username.trim(),
-          role: 'Super Admin',
-          first_name: 'Aziz',
-          last_name: 'Admin'
+          role: 'User'
         };
         localStorage.setItem('auth_user', JSON.stringify(userData));
-        if (showToast) showToast('Welcome back, Super Admin! 🍎', 'success');
+        if (showToast) showToast(`Welcome back, ${userData.first_name || userData.username}! 🍎`, 'success');
         onLoginSuccess(userData);
       } else {
-        throw new Error('Invalid authentication response');
+        throw new Error('Invalid authentication response from server');
       }
     } catch (err) {
-      console.warn('Backend login note, using fallback:', err.message);
-      // Seamless fallback for admin / manager demo credentials
-      if ((username.trim() === 'admin' || username.trim() === 'superadmin') && password) {
-        const fallbackUser = {
-          username: 'admin',
-          first_name: 'Aziz',
-          last_name: 'Admin',
-          role: 'Super Admin'
-        };
-        localStorage.setItem('access_token', 'mock_jwt_access_token_super_admin');
-        localStorage.setItem('auth_user', JSON.stringify(fallbackUser));
-        if (showToast) showToast('Logged in as Super Admin! 🥭', 'success');
-        onLoginSuccess(fallbackUser);
-      } else {
-        setError(err.message || 'Invalid username or password. Try admin / admin123');
-      }
+      setError(err.message || 'Invalid username or password.');
     } finally {
       setLoading(false);
     }
-  };
-
-  const fillSuperAdmin = () => {
-    setUsername('admin');
-    setPassword('admin123');
-    setError('');
   };
 
   return (
@@ -164,18 +138,6 @@ export default function LoginView({ onLoginSuccess, theme, toggleTheme, showToas
             Fresh Fruits & Dry Fruits Trading ERP
           </p>
         </div>
-
-        {/* Quick Fill Super Admin Button */}
-        <button
-          type="button"
-          className="quick-admin-pill"
-          onClick={fillSuperAdmin}
-          title="Click to auto-fill Super Admin credentials"
-        >
-          <ShieldCheck size={16} color="#10b981" />
-          <span>Quick Fill: Super Admin (admin / admin123)</span>
-          <Sparkles size={14} color="#f59e0b" />
-        </button>
 
         {/* Error Alert */}
         {error && (
@@ -280,24 +242,6 @@ export default function LoginView({ onLoginSuccess, theme, toggleTheme, showToas
             )}
           </button>
         </form>
-
-        {/* Footer Note */}
-        <div style={{
-          marginTop: '22px',
-          textAlign: 'center',
-          fontSize: '0.74rem',
-          color: 'var(--text-secondary)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: '6px'
-        }}>
-          <span>🍎 Mandi Gate</span>
-          <span>•</span>
-          <span>Weighbridge ⚖️</span>
-          <span>•</span>
-          <span>Cold Storage ❄️</span>
-        </div>
       </div>
     </div>
   );

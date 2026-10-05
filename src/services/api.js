@@ -1,4 +1,4 @@
-const BASE_URL = 'http://127.0.0.1:8000/api/v1';
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api/v1';
 
 let isRefreshing = false;
 let refreshSubscribers = [];
@@ -35,37 +35,12 @@ async function tryRefreshToken() {
     // Refresh failed
   }
 
-  // If refresh failed completely, clear invalid tokens
+  // If refresh failed completely, clear tokens
   localStorage.removeItem('access_token');
   localStorage.removeItem('refresh_token');
   localStorage.removeItem('auth_user');
   window.dispatchEvent(new CustomEvent('auth:unauthorized'));
   return null;
-}
-
-export async function ensureAuthToken() {
-  let token = localStorage.getItem('access_token');
-  if (!token || token.startsWith('mock_')) {
-    try {
-      const res = await fetch(`${BASE_URL}/auth/login/`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: 'admin', password: 'admin123' })
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.access) {
-          localStorage.setItem('access_token', data.access);
-          if (data.refresh) localStorage.setItem('refresh_token', data.refresh);
-          if (data.user) localStorage.setItem('auth_user', JSON.stringify(data.user));
-          return data.access;
-        }
-      }
-    } catch {
-      // offline / fallback
-    }
-  }
-  return token;
 }
 
 export async function request(endpoint, options = {}, isRetry = false) {
@@ -75,14 +50,8 @@ export async function request(endpoint, options = {}, isRetry = false) {
     ...(options.headers || {})
   };
 
-  let token = localStorage.getItem('access_token');
-  if (!token || token.startsWith('mock_')) {
-    if (!endpoint.includes('/auth/login')) {
-      token = await ensureAuthToken();
-    }
-  }
-
-  if (token && !token.startsWith('mock_')) {
+  const token = localStorage.getItem('access_token');
+  if (token) {
     headers['Authorization'] = `Bearer ${token}`;
   }
 
@@ -130,7 +99,14 @@ export async function request(endpoint, options = {}, isRetry = false) {
       throw new Error(errData.error || errData.detail || `Request failed with status ${res.status}`);
     }
 
-    return await res.json();
+    if (res.status === 204 || res.headers.get('content-length') === '0') {
+      return null;
+    }
+    const contentType = res.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      return await res.json();
+    }
+    return await res.text();
   } catch (err) {
     if (!res || res.status !== 401) {
       console.warn(`API Error on ${url}:`, err.message);
@@ -140,9 +116,9 @@ export async function request(endpoint, options = {}, isRetry = false) {
 }
 
 export const api = {
-  get: (endpoint) => request(endpoint, { method: 'GET' }),
-  post: (endpoint, body) => request(endpoint, { method: 'POST', body: JSON.stringify(body) }),
-  put: (endpoint, body) => request(endpoint, { method: 'PUT', body: JSON.stringify(body) }),
-  patch: (endpoint, body) => request(endpoint, { method: 'PATCH', body: JSON.stringify(body) }),
-  delete: (endpoint) => request(endpoint, { method: 'DELETE' }),
+  get: (endpoint, options) => request(endpoint, { method: 'GET', ...options }),
+  post: (endpoint, body, options) => request(endpoint, { method: 'POST', body: JSON.stringify(body), ...options }),
+  put: (endpoint, body, options) => request(endpoint, { method: 'PUT', body: JSON.stringify(body), ...options }),
+  patch: (endpoint, body, options) => request(endpoint, { method: 'PATCH', body: JSON.stringify(body), ...options }),
+  delete: (endpoint, options) => request(endpoint, { method: 'DELETE', ...options })
 };
