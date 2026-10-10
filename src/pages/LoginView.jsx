@@ -35,7 +35,9 @@ export default function LoginView({ onLoginSuccess, theme, toggleTheme, showToas
 
   const handleSubmit = async (e) => {
     if (e) e.preventDefault();
-    if (!username.trim() || !password.trim()) {
+    const u = username.trim();
+    const p = password.trim();
+    if (!u || !p) {
       setError('Please enter both username and password.');
       return;
     }
@@ -45,17 +47,23 @@ export default function LoginView({ onLoginSuccess, theme, toggleTheme, showToas
 
     try {
       const response = await api.post('/auth/login/', {
-        username: username.trim(),
-        password: password
+        username: u,
+        password: p
       });
 
       if (response && response.access) {
         localStorage.setItem('access_token', response.access);
         if (response.refresh) localStorage.setItem('refresh_token', response.refresh);
         const userData = response.user || {
-          username: username.trim(),
-          role: 'User'
+          username: u,
+          role: u === 'sales' ? 'Sales Person (Spot)' : 'Super Admin',
+          role_code: u === 'sales' ? 'SALES_PERSON' : 'SUPER_ADMIN'
         };
+        // Normalize role properties
+        if (u.toLowerCase() === 'sales' || userData.profile?.role_code === 'SALES_PERSON') {
+          userData.role_code = 'SALES_PERSON';
+          userData.role = 'Sales Person (Spot)';
+        }
         localStorage.setItem('auth_user', JSON.stringify(userData));
         if (showToast) showToast(`Welcome back, ${userData.first_name || userData.username}! 🍎`, 'success');
         onLoginSuccess(userData);
@@ -114,7 +122,7 @@ export default function LoginView({ onLoginSuccess, theme, toggleTheme, showToas
       {/* Central Fruit Login Card */}
       <div className={`fruit-login-card ${error ? 'shake-error' : ''}`}>
         {/* Brand & Fruit Header */}
-        <div style={{ textAlign: 'center', marginBottom: '24px' }}>
+        <div style={{ textAlign: 'center', marginBottom: '20px' }}>
           <div className="fruit-brand-badge">
             <Apple size={36} color="#ffffff" />
           </div>
@@ -137,6 +145,72 @@ export default function LoginView({ onLoginSuccess, theme, toggleTheme, showToas
           }}>
             Fresh Fruits & Dry Fruits Trading ERP
           </p>
+        </div>
+
+        {/* Role Quick Selector Pills */}
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: '1fr 1fr',
+          gap: '8px',
+          marginBottom: '18px',
+          background: 'rgba(255, 255, 255, 0.05)',
+          padding: '4px',
+          borderRadius: '12px',
+          border: '1px solid var(--border-subtle, rgba(255,255,255,0.1))'
+        }}>
+          <button
+            type="button"
+            onClick={() => {
+              setUsername('admin');
+              setPassword('admin123');
+              setError('');
+            }}
+            style={{
+              padding: '8px 10px',
+              borderRadius: '9px',
+              border: username.toLowerCase() === 'admin' ? '1.5px solid #10b981' : '1px solid transparent',
+              background: username.toLowerCase() === 'admin' ? 'rgba(16, 185, 129, 0.15)' : 'transparent',
+              color: username.toLowerCase() === 'admin' ? '#10b981' : 'var(--text-secondary)',
+              cursor: 'pointer',
+              fontWeight: 700,
+              fontSize: '0.78rem',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: '2px',
+              transition: 'all 0.15s ease'
+            }}
+          >
+            <span>👑 Admin</span>
+            <span style={{ fontSize: '0.67rem', opacity: 0.75, fontWeight: 500 }}>admin / admin123</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setUsername('sales');
+              setPassword('sales123');
+              setError('');
+            }}
+            style={{
+              padding: '8px 10px',
+              borderRadius: '9px',
+              border: username.toLowerCase() === 'sales' ? '1.5px solid #f97316' : '1px solid transparent',
+              background: username.toLowerCase() === 'sales' ? 'rgba(249, 115, 22, 0.15)' : 'transparent',
+              color: username.toLowerCase() === 'sales' ? '#f97316' : 'var(--text-secondary)',
+              cursor: 'pointer',
+              fontWeight: 700,
+              fontSize: '0.78rem',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: '2px',
+              transition: 'all 0.15s ease'
+            }}
+          >
+            <span>👤 Spot Sales</span>
+            <span style={{ fontSize: '0.67rem', opacity: 0.75, fontWeight: 500 }}>sales / sales123</span>
+          </button>
         </div>
 
         {/* Error Alert */}

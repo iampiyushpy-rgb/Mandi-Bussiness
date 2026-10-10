@@ -4,7 +4,8 @@ import {
   Apple,
   X,
   ReceiptText,
-  Wallet
+  Wallet,
+  FileText
 } from 'lucide-react';
 
 export default function Sidebar({
@@ -13,7 +14,9 @@ export default function Sidebar({
   collapsed,
   mobileOpen,
   setMobileOpen,
-  onLogout
+  onLogout,
+  currentUser,
+  isSalesPerson: isSalesPersonProp
 }) {
   const handleItemClick = (action) => {
     if (action) action();
@@ -22,42 +25,77 @@ export default function Sidebar({
     }
   };
 
-  const navItems = [
-    {
-      id: 'dashboard',
-      label: 'Admin Dashboard',
-      subtitle: 'Mandi Trading Overview',
-      icon: LayoutDashboard,
-      badge: 'Live',
-      badgeColor: '#10b981',
-      action: () => {
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-        if (setActiveTab) setActiveTab('dashboard');
-      }
-    },
-    {
-      id: 'cash-sell-transactions',
-      label: 'Cash Sell Transactions',
-      subtitle: 'Collection & Expenses',
-      icon: Wallet,
-      badge: 'Txn',
-      badgeColor: '#8b5cf6',
-      action: () => {
-        if (setActiveTab) setActiveTab('cash-sell-transactions');
-      }
-    },
-    {
-      id: 'cash-sale',
-      label: 'Party Khata',
-      subtitle: 'Suppliers & History',
-      icon: ReceiptText,
-      badge: 'Khata',
-      badgeColor: '#f59e0b',
-      action: () => {
-        if (setActiveTab) setActiveTab('cash-sale');
-      }
-    }
-  ];
+  const isSalesPerson = isSalesPersonProp !== undefined
+    ? isSalesPersonProp
+    : Boolean(
+        currentUser?.role_code === 'SALES_PERSON' ||
+        currentUser?.profile?.role_code === 'SALES_PERSON' ||
+        currentUser?.role === 'Sales Person (Spot)' ||
+        currentUser?.username?.toLowerCase() === 'sales'
+      );
+
+  const navItems = isSalesPerson
+    ? [
+        {
+          id: 'dashboard',
+          label: 'Spot Sales Board',
+          subtitle: 'Lot Delivery & Bikri Entry',
+          icon: LayoutDashboard,
+          badge: 'Spot',
+          badgeColor: '#f97316',
+          action: () => {
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+            if (setActiveTab) setActiveTab('dashboard');
+          }
+        }
+      ]
+    : [
+        {
+          id: 'dashboard',
+          label: 'Admin Dashboard',
+          subtitle: 'Mandi Trading Overview',
+          icon: LayoutDashboard,
+          badge: 'Live',
+          badgeColor: '#10b981',
+          action: () => {
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+            if (setActiveTab) setActiveTab('dashboard');
+          }
+        },
+        {
+          id: 'cash-sale',
+          label: 'Party Khata',
+          subtitle: 'Suppliers & History',
+          icon: ReceiptText,
+          badge: 'Khata',
+          badgeColor: '#f59e0b',
+          action: () => {
+            if (setActiveTab) setActiveTab('cash-sale');
+          }
+        },
+        {
+          id: 'cash-sell-transactions',
+          label: 'Cash Sell Transactions',
+          subtitle: 'Collection & Expenses',
+          icon: Wallet,
+          badge: 'Txn',
+          badgeColor: '#8b5cf6',
+          action: () => {
+            if (setActiveTab) setActiveTab('cash-sell-transactions');
+          }
+        },
+        {
+          id: 'daily-reports',
+          label: 'Daily Reports',
+          subtitle: 'Saved Reports & Audits',
+          icon: FileText,
+          badge: 'Reports',
+          badgeColor: '#0ea5e9',
+          action: () => {
+            if (setActiveTab) setActiveTab('daily-reports');
+          }
+        }
+      ];
 
   return (
     <>
@@ -82,7 +120,7 @@ export default function Sidebar({
             {!collapsed && (
               <div className="brand-info">
                 <span className="brand-title">AzizInternational</span>
-                <span className="brand-subtitle">MANDI ERP • SPA</span>
+                <span className="brand-subtitle">{isSalesPerson ? 'SPOT SALES DESK' : 'MANDI ERP • SPA'}</span>
               </div>
             )}
           </div>
@@ -110,7 +148,7 @@ export default function Sidebar({
         </div>
 
         <div className="sidebar-nav">
-          {!collapsed && <div className="nav-section-title">ADMIN PANEL</div>}
+          {!collapsed && <div className="nav-section-title">{isSalesPerson ? 'SPOT SALES PANEL' : 'ADMIN PANEL'}</div>}
 
           {navItems.map(item => {
             const Icon = item.icon;

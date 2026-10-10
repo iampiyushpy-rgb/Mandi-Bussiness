@@ -6,6 +6,7 @@ import {
   BookOpen,
   FileSpreadsheet
 } from 'lucide-react';
+import { formatDisplayDate } from '../../utils/dateUtils';
 
 export default function UdhaarHistoryView({
   truckSalesList = [],
@@ -89,6 +90,17 @@ export default function UdhaarHistoryView({
   // Consolidate all sales and filter for Udhaar / Credit Sales
   const allUdhaarSales = useMemo(() => {
     const salesMap = new Map();
+    const sigCounts = new Map();
+
+    const cleanTruck = (t) => (t || '').replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+    const makeSig = (truck, cust, dateStr, boxes, total) => {
+      const t = cleanTruck(truck);
+      const c = (cust || '').trim().toLowerCase().replace(/\s+/g, ' ');
+      const d = formatDisplayDate(dateStr);
+      const b = Math.round(Number(boxes || 0));
+      const tot = Math.round(Number(total || 0));
+      return `${t}__${c}__${d}__${b}__${tot}`;
+    };
 
     // 1. From truckSalesList (rapid board sales)
     (truckSalesList || []).forEach(s => {
@@ -97,6 +109,8 @@ export default function UdhaarHistoryView({
           ...s,
           source: 'board'
         });
+        const sig = makeSig(s.truck_no, s.customer_name, s.selling_date || s.date, s.boxes, s.total);
+        sigCounts.set(sig, (sigCounts.get(sig) || 0) + 1);
       }
     });
 
@@ -104,6 +118,10 @@ export default function UdhaarHistoryView({
     (customerProfiles || []).forEach(c => {
       (c.buy_history || []).forEach(b => {
         if (b && b.id !== undefined && b.id !== null && !salesMap.has(String(b.id))) {
+          const sig = makeSig(b.truck_no, c.customer_name, b.date || b.selling_date, b.boxes, b.total);
+          if ((sigCounts.get(sig) || 0) > 0) return;
+          sigCounts.set(sig, 1);
+
           salesMap.set(String(b.id), {
             id: b.id,
             selling_date: b.date || b.selling_date,
@@ -130,12 +148,19 @@ export default function UdhaarHistoryView({
         const sPaid = s.amount_paid !== undefined && s.amount_paid !== null
           ? Number(s.amount_paid)
           : (s.payment_type === 'CASH' || s.payment_mode === 'CASH' ? sTotal : 0);
-        const sBoxes = Number(s.total_boxes || s.boxes || s.quantity || 0);
+        const sBoxes = Number(s.total_boxes || s.boxes || s.quantity || s.crates_sold || 0);
         const sRate = Number(s.rate || s.rate_per_box || (sBoxes > 0 ? sTotal / sBoxes : 0));
+        const sDate = s.sale_date || s.order_date || s.date || (s.created_at ? String(s.created_at).slice(0, 10) : '');
+        const sig = makeSig(s.truck_no || s.truck_number, s.customer_name, sDate, sBoxes, sTotal);
+
+        if ((sigCounts.get(sig) || 0) > 0) {
+          sigCounts.set(sig, sigCounts.get(sig) - 1);
+          return;
+        }
 
         salesMap.set(String(s.id), {
           id: s.id,
-          selling_date: s.sale_date || s.date || (s.created_at ? String(s.created_at).slice(0, 10) : ''),
+          selling_date: sDate,
           customer_name: s.customer_name || 'Customer',
           customer_phone: s.customer_phone || '',
           truck_no: s.truck_no || s.truck_number || '',

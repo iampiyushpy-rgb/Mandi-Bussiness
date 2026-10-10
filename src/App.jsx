@@ -4,17 +4,7 @@ import Navbar from './components/layout/Navbar';
 import DashboardView from './pages/DashboardView';
 import LoginView from './pages/LoginView';
 
-import {
-  initialDashboardData,
-  sampleProducts,
-  sampleSuppliers,
-  sampleCustomers,
-  sampleTrucks,
-  sampleWarehouses,
-  samplePurchases,
-  sampleSales,
-  sampleTruckPayments
-} from './services/mockData';
+import { initialDashboardData } from './services/mockData';
 import { api } from './services/api';
 
 export default function App() {
@@ -57,12 +47,32 @@ export default function App() {
     }
   });
 
+  const isSalesPerson = Boolean(
+    currentUser?.role_code === 'SALES_PERSON' ||
+    currentUser?.profile?.role_code === 'SALES_PERSON' ||
+    currentUser?.role === 'Sales Person (Spot)' ||
+    currentUser?.username?.toLowerCase() === 'sales'
+  );
+
+  useEffect(() => {
+    if (isSalesPerson && activeTab !== 'dashboard') {
+      setActiveTab('dashboard');
+    }
+  }, [isSalesPerson, activeTab]);
+
   const handleLoginSuccess = (userData) => {
     if (userData) {
       setCurrentUser(userData);
+      const isSales = userData.role_code === 'SALES_PERSON' ||
+                      userData.profile?.role_code === 'SALES_PERSON' ||
+                      userData.username?.toLowerCase() === 'sales';
+      if (isSales) {
+        setActiveTab('dashboard');
+      }
     }
     setIsAuthenticated(true);
-    showToast('Welcome back, Super Admin! 🍎', 'success');
+    const roleTitle = userData?.role || userData?.profile?.role_name || 'User';
+    showToast(`Welcome, ${userData?.first_name || userData?.username || 'User'} (${roleTitle})! 🍎`, 'success');
   };
 
   const handleLogout = () => {
@@ -93,17 +103,13 @@ export default function App() {
 
   // Live state
   const [dashboardData, setDashboardData] = useState(initialDashboardData);
-  const [products, setProducts] = useState(sampleProducts);
-  const [categories, setCategories] = useState([{ id: 1, name: 'Fresh Fruits' }, { id: 2, name: 'Dry Fruits & Nuts' }]);
-  const [units, setUnits] = useState([{ id: 1, unit_name: 'Kilogram', symbol: 'KG' }, { id: 2, unit_name: 'Box', symbol: 'BX' }]);
-  const [suppliers, setSuppliers] = useState(sampleSuppliers);
-  const [customers, setCustomers] = useState(sampleCustomers);
-  const [trucks, setTrucks] = useState(sampleTrucks);
-  const [warehouses, setWarehouses] = useState(sampleWarehouses);
-  const [purchasesList, setPurchasesList] = useState(samplePurchases);
-  const [truckPayments, setTruckPayments] = useState(sampleTruckPayments);
-  const [salesList, setSalesList] = useState(sampleSales);
-  const [batches, setBatches] = useState([]);
+  const [products, setProducts] = useState([]);
+  const [suppliers, setSuppliers] = useState([]);
+  const [customers, setCustomers] = useState([]);
+  const [trucks, setTrucks] = useState([]);
+  const [purchasesList, setPurchasesList] = useState([]);
+  const [truckPayments, setTruckPayments] = useState([]);
+  const [salesList, setSalesList] = useState([]);
   const [customerLedger, setCustomerLedger] = useState([]);
 
   // Toast notification
@@ -222,6 +228,8 @@ export default function App() {
         mobileOpen={mobileOpen}
         setMobileOpen={setMobileOpen}
         onLogout={handleLogout}
+        currentUser={currentUser}
+        isSalesPerson={isSalesPerson}
       />
 
       {/* Main Single Page Layout */}

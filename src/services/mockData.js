@@ -16,12 +16,3 @@ export const initialDashboardData = {
   trend_chart: []
 };
 
-export const sampleProducts = [];
-export const sampleSuppliers = [];
-export const sampleCustomers = [];
-export const sampleTrucks = [];
-export const sampleWarehouses = [];
-export const samplePurchases = [];
-export const sampleTruckPayments = [];
-export const sampleSales = [];
-export const sampleCustomerLedger = [];

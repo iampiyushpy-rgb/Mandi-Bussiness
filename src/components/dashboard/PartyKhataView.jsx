@@ -141,8 +141,28 @@ export default function PartyKhataView({
       }
     });
 
+    // 4. From cashSalePayments (payments given / paisa diya)
+    (cashSalePayments || []).forEach(cp => {
+      const name = (cp.supplier_name || '').trim();
+      if (name) {
+        const key = name.toLowerCase();
+        if (!map.has(key)) {
+          map.set(key, {
+            id: `pay-supp-${name}`,
+            supplier_name: name,
+            phone: '',
+            city: '',
+            bank_name: '',
+            account_number: '',
+            ifsc_code: '',
+            branch_name: ''
+          });
+        }
+      }
+    });
+
     return Array.from(map.values()).sort((a, b) => a.supplier_name.localeCompare(b.supplier_name));
-  }, [suppliers, supplierProfiles, cashSaleSettlements]);
+  }, [suppliers, supplierProfiles, cashSaleSettlements, cashSalePayments]);
 
   // ---------------------------------------------------------------------------
   // 2. Helper: Get All Settled Trucks for a Supplier

@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Menu,
   Search,
@@ -53,7 +54,7 @@ export default function Navbar({
   const initialChar = displayName ? displayName[0].toUpperCase() : 'A';
 
   return (
-    <header className="erp-navbar">
+    <header className="erp-navbar" style={{ position: 'relative', zIndex: isProfileMenuOpen ? 5000 : 2000 }}>
       <div className="navbar-left">
         <button
           className="toggle-sidebar-btn"
@@ -89,7 +90,7 @@ export default function Navbar({
         )}
 
         {/* User Profile Container with Dropdown */}
-        <div ref={profileRef} style={{ position: 'relative' }}>
+        <div ref={profileRef} style={{ position: 'relative', zIndex: isProfileMenuOpen ? 5100 : 10 }}>
           <div
             className="user-profile-widget"
             onClick={() => setIsProfileMenuOpen(prev => !prev)}
@@ -140,8 +141,8 @@ export default function Navbar({
                 background: 'var(--bg-card, #ffffff)',
                 border: '1.5px solid var(--border-subtle, #e2e8f0)',
                 borderRadius: '14px',
-                boxShadow: '0 12px 28px rgba(0, 0, 0, 0.12), 0 4px 10px rgba(0, 0, 0, 0.05)',
-                zIndex: 1000,
+                boxShadow: '0 12px 28px rgba(0, 0, 0, 0.18), 0 4px 10px rgba(0, 0, 0, 0.08)',
+                zIndex: 5200,
                 padding: '6px',
                 animation: 'fadeIn 0.15s ease'
               }}
@@ -253,17 +254,17 @@ export default function Navbar({
       {/* ===================================================================== */}
       {/* MY PROFILE MODAL                                                      */}
       {/* ===================================================================== */}
-      {isProfileModalOpen && (
+      {isProfileModalOpen && createPortal(
         <div
           style={{
             position: 'fixed',
             inset: 0,
-            background: 'rgba(15, 23, 42, 0.55)',
-            backdropFilter: 'blur(5px)',
+            background: 'rgba(15, 23, 42, 0.65)',
+            backdropFilter: 'blur(6px)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            zIndex: 9999,
+            zIndex: 999999,
             padding: '16px'
           }}
           onClick={() => setIsProfileModalOpen(false)}
@@ -271,13 +272,17 @@ export default function Navbar({
           <div
             style={{
               background: 'var(--bg-card, #ffffff)',
-              borderRadius: '18px',
+              borderRadius: '20px',
               width: '100%',
-              maxWidth: '430px',
+              maxWidth: '420px',
+              maxHeight: '90vh',
               border: '1.5px solid var(--border-subtle, #e2e8f0)',
-              boxShadow: '0 20px 40px -10px rgba(0,0,0,0.2)',
+              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.28)',
               overflow: 'hidden',
-              animation: 'fadeIn 0.2s ease'
+              display: 'flex',
+              flexDirection: 'column',
+              animation: 'fadeIn 0.2s ease',
+              margin: 'auto'
             }}
             onClick={(e) => e.stopPropagation()}
           >
@@ -306,22 +311,28 @@ export default function Navbar({
                   border: 'none',
                   cursor: 'pointer',
                   color: 'var(--text-muted, #64748b)',
-                  padding: '4px',
-                  borderRadius: '6px',
-                  display: 'flex'
+                  padding: '6px',
+                  borderRadius: '8px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  transition: 'background 0.15s ease'
                 }}
+                onMouseEnter={(e) => e.currentTarget.style.background = 'var(--border-subtle, #e2e8f0)'}
+                onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                title="Close"
               >
                 <X size={18} />
               </button>
             </div>
 
             {/* Modal Body */}
-            <div style={{ padding: '24px 20px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '18px' }}>
+            <div style={{ padding: '24px 20px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '18px', overflowY: 'auto' }}>
               {/* Avatar Hero */}
               <div
                 style={{
-                  width: '74px',
-                  height: '74px',
+                  width: '76px',
+                  height: '76px',
                   borderRadius: '50%',
                   background: 'linear-gradient(135deg, #10b981 0%, #f97316 100%)',
                   display: 'flex',
@@ -345,11 +356,11 @@ export default function Navbar({
                     display: 'inline-flex',
                     alignItems: 'center',
                     gap: '5px',
-                    background: 'rgba(16, 185, 129, 0.1)',
+                    background: 'rgba(16, 185, 129, 0.12)',
                     color: '#059669',
-                    padding: '3px 10px',
+                    padding: '4px 12px',
                     borderRadius: '12px',
-                    fontSize: '0.75rem',
+                    fontSize: '0.78rem',
                     fontWeight: 800,
                     marginTop: '6px'
                   }}
@@ -364,13 +375,13 @@ export default function Navbar({
                 style={{
                   width: '100%',
                   background: 'var(--bg-main, #f8fafc)',
-                  borderRadius: '12px',
+                  borderRadius: '14px',
                   border: '1px solid var(--border-subtle, #e2e8f0)',
                   padding: '14px 16px',
                   display: 'flex',
                   flexDirection: 'column',
                   gap: '12px',
-                  fontSize: '0.84rem'
+                  fontSize: '0.86rem'
                 }}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -383,8 +394,8 @@ export default function Navbar({
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <span style={{ color: 'var(--text-muted, #64748b)', fontWeight: 600 }}>Account Status</span>
-                  <span style={{ fontWeight: 800, color: '#059669', display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
-                    <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#10b981', display: 'inline-block' }}></span>
+                  <span style={{ fontWeight: 800, color: '#059669', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                    <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#10b981', display: 'inline-block', boxShadow: '0 0 0 2px rgba(16,185,129,0.2)' }}></span>
                     Active Session
                   </span>
                 </div>
@@ -413,17 +424,20 @@ export default function Navbar({
                   display: 'inline-flex',
                   alignItems: 'center',
                   gap: '6px',
-                  padding: '8px 14px',
-                  borderRadius: '8px',
+                  padding: '9px 16px',
+                  borderRadius: '10px',
                   border: '1px solid rgba(239, 68, 68, 0.25)',
                   background: 'rgba(239, 68, 68, 0.08)',
                   color: '#ef4444',
                   fontWeight: 700,
-                  fontSize: '0.82rem',
-                  cursor: 'pointer'
+                  fontSize: '0.84rem',
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease'
                 }}
+                onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(239, 68, 68, 0.16)'}
+                onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(239, 68, 68, 0.08)'}
               >
-                <LogOut size={14} />
+                <LogOut size={15} />
                 <span>Log Out</span>
               </button>
 
@@ -431,21 +445,25 @@ export default function Navbar({
                 type="button"
                 onClick={() => setIsProfileModalOpen(false)}
                 style={{
-                  padding: '8px 18px',
-                  borderRadius: '8px',
+                  padding: '9px 20px',
+                  borderRadius: '10px',
                   border: 'none',
                   background: 'var(--emerald, #10b981)',
                   color: '#ffffff',
                   fontWeight: 800,
-                  fontSize: '0.84rem',
-                  cursor: 'pointer'
+                  fontSize: '0.86rem',
+                  cursor: 'pointer',
+                  transition: 'background 0.15s ease'
                 }}
+                onMouseEnter={(e) => e.currentTarget.style.background = 'var(--emerald-dark, #059669)'}
+                onMouseLeave={(e) => e.currentTarget.style.background = 'var(--emerald, #10b981)'}
               >
                 Close
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </header>
   );
